@@ -56,4 +56,4 @@ No iPhone/Mac app integration, public enrollment, billing or notifications are i
 
 ## License
 
-Copyright 2026 Narra Labs. Licensed under the [Apache License, Version 2.0](LICENSE).
+Copyright 2026 Laboros AI, Inc. Licensed under the [Apache License, Version 2.0](LICENSE).
