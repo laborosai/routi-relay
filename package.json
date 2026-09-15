@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "pair": "tsx src/pair.ts",
-    "demo": "tsx src/demo.ts"
+    "demo": "tsx src/demo.ts",
+    "test:remote": "tsx src/remote-test.ts"
   },
   "dependencies": {
     "ws": "^8.21.3"

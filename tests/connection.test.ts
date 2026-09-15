@@ -112,3 +112,25 @@ test('host reconnects after relay restart and accepts a fresh session', { timeou
   viewer.write('new command')
   assert.equal((await response)[0].toString(), 'new command')
 })
+
+test('large TLS writes cross the relay without exceeding its message limit', { timeout: 5000 }, async t => {
+  const { pairing, url } = await setup(t)
+  const host = startHost(url, pairing.host, { onConnection: stream => stream.pipe(stream) })
+  t.after(() => host.stop())
+  await host.ready
+  const viewer = await connectViewer(url, pairing.viewer)
+  t.after(() => viewer.destroy())
+  const payload = Buffer.alloc(1024 * 1024, 0x52)
+  const result = new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    viewer.on('data', (data: Buffer) => {
+      chunks.push(data); size += data.length
+      if (size >= payload.length) resolve(Buffer.concat(chunks))
+    })
+    viewer.once('error', reject)
+    viewer.once('close', () => reject(Error('Closed before complete payload')))
+  })
+  viewer.write(payload)
+  assert.deepEqual(await result, payload)
+})

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createServer, connect, type TLSSocket } from 'node:tls'
-import type { Duplex } from 'node:stream'
+import { Duplex } from 'node:stream'
 import { WebSocket, createWebSocketStream } from 'ws'
 import type { Device } from './pairing.js'
 
@@ -39,8 +39,28 @@ function transport(base: string, token: string, id: string, signal?: AbortSignal
       clearTimeout(timeout)
       // Attach immediately so a TLS record arriving in this same read cannot be lost.
       const stream = createWebSocketStream(ws, { highWaterMark: 64 * 1024 })
-      ws.on('close', () => stream.destroy())
-      resolve(stream)
+      // TLS can emit a large write containing many records. Bound each WebSocket
+      // message independently; TLS itself is a byte stream and permits splitting.
+      const tunnel = new Duplex({
+        read() { stream.resume() },
+        write(data: Buffer, _encoding, done) {
+          let offset = 0
+          function send(error?: Error | null) {
+            if (error || offset >= data.length) { done(error); return }
+            const chunk = data.subarray(offset, offset + 64 * 1024)
+            offset += chunk.length
+            stream.write(chunk, send)
+          }
+          send()
+        },
+        final(done) { stream.end(done) },
+        destroy(error, done) { stream.destroy(); done(error) },
+      })
+      stream.on('data', (data: Buffer) => { if (!tunnel.push(data)) stream.pause() })
+      stream.on('end', () => tunnel.push(null))
+      stream.on('error', error => tunnel.destroy(error))
+      ws.on('close', () => tunnel.destroy())
+      resolve(tunnel)
     })
     signal?.addEventListener('abort', abort, { once: true })
     if (signal?.aborted) abort()

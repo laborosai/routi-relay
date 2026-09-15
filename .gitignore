@@ -3,3 +3,4 @@ dist/
 *.local.json
 .env
 *.local/
+deploy/.env

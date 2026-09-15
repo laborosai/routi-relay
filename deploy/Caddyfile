@@ -1,0 +1,9 @@
+{$RELAY_DOMAIN} {
+    @testClients remote_ip {$TEST_CLIENT_IPS}
+    handle @testClients {
+        reverse_proxy relay:8787
+    }
+    handle {
+        respond "Private Routi Connect test" 403
+    }
+}

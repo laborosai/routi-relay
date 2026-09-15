@@ -1,0 +1,51 @@
+name: routi-connect
+services:
+  relay:
+    build: ..
+    restart: unless-stopped
+    init: true
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      RELAY_PAIRS_FILE: /run/secrets/relay-pairs
+    secrets:
+      - relay-pairs
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 64
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: '2'}
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      RELAY_DOMAIN: ${RELAY_DOMAIN:-connect.routibot.com}
+      TEST_CLIENT_IPS: ${TEST_CLIENT_IPS:?Set space-separated client IPs or CIDRs for the private pilot}
+    ports: ['80:80', '443:443']
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      relay:
+        condition: service_healthy
+    mem_limit: 256m
+    pids_limit: 128
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: '2'}
+secrets:
+  relay-pairs:
+    file: ${RELAY_PAIRS_FILE:?Set path to server-side relay.json containing hashes only}
+volumes:
+  caddy-data:
+  caddy-config:
