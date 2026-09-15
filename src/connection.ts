@@ -88,6 +88,7 @@ export function startHost(base: string, device: Device, options: {
   onConnection: (stream: TLSSocket) => void;
   onError?: (error: Error) => void;
   reconnectMs?: number;
+  onState?: (state: 'connecting' | 'connected' | 'reconnecting' | 'rejected' | 'disconnected') => void;
 }) {
   // Validate before scheduling any reconnects.
   endpoint(base, '/v1/host')
@@ -128,11 +129,15 @@ export function startHost(base: string, device: Device, options: {
     attempt = new AbortController()
     const active = attempt
     let rejected = false
+    options.onState?.('connecting')
     control = socket(base, device.token, '/v1/host')
     control.on('unexpected-response', (_request, response) => {
       response.resume()
       rejected = response.statusCode === 401 || response.statusCode === 403
-      if (rejected) rejectReady(Error('Host credential rejected; pair this device again'))
+      if (rejected) {
+        options.onState?.('rejected')
+        rejectReady(Error('Host credential rejected; pair this device again'))
+      }
       control.terminate()
     })
     control.on('error', error => options.onError?.(error))
@@ -140,7 +145,7 @@ export function startHost(base: string, device: Device, options: {
       try {
         if (binary || data.toString().length > 1024) throw Error('Invalid host control message')
         const message = JSON.parse(data.toString())
-        if (message.type === 'registered') { failures = 0; resolveReady(); return }
+        if (message.type === 'registered') { failures = 0; options.onState?.('connected'); resolveReady(); return }
         if (message.type !== 'session' || typeof message.id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(message.id)) throw Error('Invalid session request')
         void accept(message.id, active.signal)
       } catch { control.terminate() }
@@ -149,6 +154,7 @@ export function startHost(base: string, device: Device, options: {
       active.abort()
       disposeStreams()
       if (!stopped && !rejected) {
+        options.onState?.('reconnecting')
         const delay = options.reconnectMs ?? Math.min(30_000, 1000 * 2 ** Math.min(failures++, 5)) + Math.floor(Math.random() * 500)
         retry = setTimeout(open, delay)
       }
@@ -160,6 +166,7 @@ export function startHost(base: string, device: Device, options: {
     stop() {
       if (stopped) return
       stopped = true
+      options.onState?.('disconnected')
       rejectReady(Error('Host stopped'))
       clearTimeout(retry)
       attempt.abort()
