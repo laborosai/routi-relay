@@ -53,3 +53,7 @@ Limits: 100 sessions globally, 4 per pair, 1 MiB per WebSocket message, 2 MiB ou
 4. Push notifications using the device registry, then subscription/trial enforcement.
 
 No iPhone/Mac app integration, public enrollment, billing or notifications are included yet. The tests exercise the real relay and TLS with simulated Node clients. A relay restart disconnects active viewers; closing a viewer must not stop the bot.
+
+## License
+
+Copyright 2026 Narra Labs. Licensed under the [Apache License, Version 2.0](LICENSE).
