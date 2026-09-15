@@ -19,7 +19,8 @@ async function setup(t: TestContext) {
 test('outbound host joins viewer on demand and exchanges data over mutual TLS', { timeout: 5000 }, async t => {
   const { pairing, url } = await setup(t)
   let authenticated = false
-  const host = startHost(url, pairing.host, { onConnection: stream => {
+  const states: string[] = []
+  const host = startHost(url, pairing.host, { onState: state => states.push(state), onConnection: stream => {
     authenticated = stream.authorized
     stream.pipe(stream)
   } })
@@ -33,6 +34,9 @@ test('outbound host joins viewer on demand and exchanges data over mutual TLS', 
   viewer.write('private chat message')
   assert.equal((await response)[0].toString(), 'private chat message')
   assert.equal(authenticated, true)
+  assert.deepEqual(states, ['connecting', 'connected'])
+  host.stop()
+  assert.equal(states.at(-1), 'disconnected')
 })
 
 test('a stolen relay token alone cannot impersonate the paired viewer', { timeout: 5000 }, async t => {
@@ -93,7 +97,8 @@ test('unencrypted non-loopback relay addresses are rejected', async () => {
 
 test('host reconnects after relay restart and accepts a fresh session', { timeout: 5000 }, async t => {
   const { pairing, relay, url } = await setup(t)
-  const host = startHost(url, pairing.host, { reconnectMs: 20, onConnection: stream => stream.pipe(stream) })
+  const states: string[] = []
+  const host = startHost(url, pairing.host, { onState: state => states.push(state), reconnectMs: 20, onConnection: stream => stream.pipe(stream) })
   t.after(() => host.stop())
   await host.ready
   const first = await connectViewer(url, pairing.viewer)
@@ -111,6 +116,8 @@ test('host reconnects after relay restart and accepts a fresh session', { timeou
   const response = once(viewer, 'data')
   viewer.write('new command')
   assert.equal((await response)[0].toString(), 'new command')
+  assert.ok(states.includes('reconnecting'))
+  assert.equal(states.at(-1), 'connected')
 })
 
 test('large TLS writes cross the relay without exceeding its message limit', { timeout: 5000 }, async t => {
@@ -133,4 +140,15 @@ test('large TLS writes cross the relay without exceeding its message limit', { t
   })
   viewer.write(payload)
   assert.deepEqual(await result, payload)
+})
+
+test('rejected host credentials report a terminal state', { timeout: 5000 }, async t => {
+  const { pairing, url } = await setup(t)
+  const states: string[] = []
+  const host = startHost(url, { ...pairing.host, token: 'x'.repeat(43) }, {
+    onConnection: stream => stream.destroy(), onState: state => states.push(state),
+  })
+  t.after(() => host.stop())
+  await assert.rejects(host.ready, /credential rejected/)
+  assert.deepEqual(states, ['connecting', 'rejected'])
 })
