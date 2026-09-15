@@ -1,11 +1,12 @@
-import { randomBytes, randomUUID } from 'node:crypto'
-import { writeFile } from 'node:fs/promises'
-import { digest } from './relay.js'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { createPairing } from './pairing.js'
 
-const hostToken = randomBytes(32).toString('base64url')
-const viewerToken = randomBytes(32).toString('base64url')
-const id = randomUUID()
-// Exclusive creation prevents overwriting existing access credentials.
-await writeFile('pair.local.json', JSON.stringify({ id, hostToken, viewerToken }, null, 2), { mode: 0o600, flag: 'wx' })
-await writeFile('relay.local.json', JSON.stringify([{ id, hostHash: digest(hostToken), viewerHash: digest(viewerToken) }], null, 2), { mode: 0o600, flag: 'wx' })
-console.log('Created pair.local.json (client secrets) and relay.local.json (server hashes). Keep client secrets private.')
+const directory = process.argv[2] ?? 'pair.local'
+// Exclusive directory creation avoids partially overwriting an existing pairing.
+await mkdir(directory, { mode: 0o700 })
+const pairing = await createPairing()
+for (const name of ['host', 'viewer', 'relay'] as const) {
+  await writeFile(join(directory, `${name}.json`), JSON.stringify(name === 'relay' ? [pairing.relay] : pairing[name], null, 2), { mode: 0o600, flag: 'wx' })
+}
+console.log(`Created local pairing in ${directory}. Only relay.json belongs on the relay server.`)

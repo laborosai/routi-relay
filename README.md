@@ -1,38 +1,55 @@
-# Routi Relay
+# Routi Connect relay
 
-Local transport prototype for reaching a Routi Mac from a paired phone. Node/TypeScript forwards WebSocket messages; browsers and agents continue running on the Mac.
+A local prototype for connecting a paired viewer to a Routi Mac through an outbound connection. The relay forwards data; agents and browsers stay on the Mac. Intended hosted address: `connect.routibot.com`. Clients also accept a custom relay origin for self-hosting.
 
-This project is separate from the Routi app. It currently tests transport with synthetic data: no app integration, public registration, billing, or notifications. Do not expose this prototype publicly or send personal data through it yet. TLS and end-to-end device authentication/encryption are still required for the hosted service.
+The connector now uses mutual TLS 1.3 inside the WebSocket tunnel. Each device trusts only its paired peer's certificate. The relay receives credential hashes and encrypted traffic, not device private keys. It can see connection timing and traffic volume. Public deployment still needs HTTPS, abuse controls, bandwidth quotas, and app integration.
 
-## Run locally
+## Try it locally
 
-Requires Node 22+ and pnpm 10.
+Requires Node 22+, pnpm 10, and OpenSSL 3 for generating local test certificates.
 
 ```sh
 pnpm install
 pnpm test
-pnpm build
-pnpm pair
-RELAY_PAIRS_FILE=relay.local.json pnpm start
+pnpm demo
 ```
 
-The relay listens on `127.0.0.1:8787`. `GET /health` returns `ok`.
+The demo creates temporary credentials, starts a loopback relay and a simulated Mac connector, exchanges a synthetic message from a simulated viewer, then revokes the pair. It cleans up after itself. No Routi bots or accounts are accessed.
 
-`pair.local.json` contains separate host and viewer credentials. `relay.local.json` contains their SHA-256 hashes. Both files are created with owner-only permissions and ignored by Git. Do not upload the client secrets to a relay host. To revoke a prototype pair, remove its server entry and restart the relay; this closes existing sessions too.
+To run the standalone relay:
 
-## Transport
+```sh
+pnpm pair
+pnpm build
+RELAY_PAIRS_FILE=pair.local/relay.json pnpm start
+```
 
-Both peers open an outbound WebSocket to `/v1/sessions/<session-id>`, with their own credential in `Authorization: Bearer <token>`. The pair is derived from the credential, not a user-supplied account ID. Each session permits one host and one viewer. Both wait for `{"type":"ready"}` before sending application data. After that, text/binary messages retain their boundaries and order.
+It listens on `127.0.0.1:8787`; `GET /health` returns `ok`. The pair command refuses to overwrite an existing directory. It writes owner-only files:
 
-The initial host connector will need to establish a session when the phone requests it. This prototype coordinates session IDs in the test; it does not yet implement a persistent host control connection. Chat and each desktop viewer will use separate sessions. No arbitrary destination URLs or TCP forwarding are accepted.
+- `host.json`: host credential, private key, certificate, trusted viewer certificate.
+- `viewer.json`: viewer credential, private key, certificate, trusted host certificate.
+- `relay.json`: pair ID and credential hashes. This is the only file that belongs on the relay server.
 
-Defaults: 100 sessions globally, 4 per pair, 1 MiB per message, 2 MiB outgoing WebSocket buffer per peer, 10 seconds to join, and 30-second heartbeat checks. Stalled sessions close instead of dropping VNC bytes. These are test limits, not subscription allowances. A force quit closes the peer connection and releases the session; heartbeat handles silent network loss. Closing a viewer must never stop its bot.
+Local certificates expire after 30 days. This provisioning command creates both identities on one machine for development. It is not the final device enrollment flow: the Apple apps must generate/store their own keys, exchange identities with explicit user approval, and support renewal and revocation. Never upload the host/viewer files to a relay. Generated `pair.local/` is ignored by Git.
 
-## Implementation sequence
+## Connection flow
 
-1. Transport foundation (here): isolation, credentials, bounded forwarding, disconnect tests.
-2. Routi integration: persistent outbound Mac connection, device pairing/revocation, end-to-end authenticated encryption, and chat/desktop routing. Bundle viewer assets locally or route their HTTP requests explicitly.
-3. Hosted pilot: HTTPS, authentication attempt limits, per-account bandwidth quotas, load/slow-client tests, deployment and monitoring. Test on a small VPS near the users; size from measurements before considering dedicated hardware.
-4. Push notifications using the paired device registry, followed by subscription/trial enforcement.
+1. `startHost()` opens an outbound `/v1/host` control WebSocket and waits for viewers.
+2. `connectViewer()` opens `/v1/sessions/<random-id>`. Authentication derives the pair from its bearer credential.
+3. The relay announces the session to that pair's host. The host opens a second outbound connection for it.
+4. Both receive `{"type":"ready"}`, then perform mutual TLS authentication through the relay. The connector exposes a decrypted byte stream only at the endpoints.
 
-A VPS is enough to begin testing; no dedicated machine is required. The first deployment will be one instance, so restarting it disconnects viewers. Clients must reconnect without automatically replaying commands. Measure concurrent streams, outgoing bytes, CPU, and peak memory before committing to capacity or pricing.
+The host requires the paired viewer certificate before delivering the stream to the application. The viewer verifies the host certificate and `routi-host` TLS identity. Standard Node/OpenSSL TLS handles encryption, integrity and session keys. There is no custom cryptographic protocol. Outer `wss://` is required except on literal loopback addresses for local tests. The host retries network disconnects with bounded exponential delay; rejected credentials stop retries. Application commands are never automatically replayed.
+
+`revokePair(id)` invalidates credentials and closes active sessions in memory. Persistent revocation currently requires removing the pair from the server configuration and restarting. The Mac must also revoke the trusted viewer identity during app integration so a compromised relay cannot restore access by itself.
+
+Limits: 100 sessions globally, 4 per pair, 1 MiB per WebSocket message, 2 MiB outgoing WebSocket buffer per peer, 10 seconds to join, and 30-second heartbeat checks. Over-budget sessions close instead of dropping bytes. Client TLS handshakes also time out. These are prototype limits, not subscription allowances or a measured capacity claim.
+
+## Next milestones
+
+1. Apple app enrollment: local key generation, QR pairing/approval, Keychain storage, durable device revocation.
+2. Adapt Routi chat and desktop viewing to the encrypted stream. Route requests only after device authentication. Desktop assets need a local bundle or explicit HTTP routing.
+3. Private hosted pilot: HTTPS, authentication rate limits, per-account traffic quotas, deployment and monitoring. Load-test normal and slow clients on a small VPS near users.
+4. Push notifications using the device registry, then subscription/trial enforcement.
+
+No iPhone/Mac app integration, public enrollment, billing or notifications are included yet. The tests exercise the real relay and TLS with simulated Node clients. A relay restart disconnects active viewers; closing a viewer must not stop the bot.

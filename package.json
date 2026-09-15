@@ -13,7 +13,8 @@
     "start": "node dist/src/index.js",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "pair": "tsx src/pair.ts"
+    "pair": "tsx src/pair.ts",
+    "demo": "tsx src/demo.ts"
   },
   "dependencies": {
     "ws": "^8.21.3"
