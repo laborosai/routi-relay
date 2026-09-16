@@ -1,4 +1,10 @@
 {$RELAY_DOMAIN} {
+    # Devices may move between Wi-Fi and cellular. These routes still require
+    # provisioned bearer credentials at the relay; enrollment is not public.
+    @devices path /v1/host /v1/sessions/*
+    handle @devices {
+        reverse_proxy relay:8787
+    }
     @testClients remote_ip {$TEST_CLIENT_IPS}
     handle @testClients {
         reverse_proxy relay:8787
