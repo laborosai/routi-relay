@@ -86,6 +86,7 @@ export async function connectViewer(base: string, device: Device, signal?: Abort
 /** One outbound control connection per paired viewer; sessions are opened on demand. */
 export function startHost(base: string, device: Device, options: {
   onConnection: (stream: TLSSocket) => void;
+  onPairingConnection?: (stream: TLSSocket) => void;
   onError?: (error: Error) => void;
   reconnectMs?: number;
   onState?: (state: 'connecting' | 'connected' | 'reconnecting' | 'rejected' | 'disconnected') => void;
@@ -105,9 +106,11 @@ export function startHost(base: string, device: Device, options: {
   // Callers may use the ready promise or simply leave the connector running.
   void ready.catch(() => {})
   const tls = createServer({ key: device.key, cert: device.cert, ca: device.peerCert,
-    requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3', handshakeTimeout: 10_000 }, stream => {
+    requestCert: true, rejectUnauthorized: !options.onPairingConnection, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3', handshakeTimeout: 10_000 }, stream => {
     stream.on('error', error => options.onError?.(error))
-    options.onConnection(stream)
+    if (stream.authorized) options.onConnection(stream)
+    else if (options.onPairingConnection) options.onPairingConnection(stream)
+    else stream.destroy()
   })
   tls.on('tlsClientError', (error, stream) => { stream.destroy(); options.onError?.(error) })
   const disposeStreams = () => { for (const stream of streams) stream.destroy(); streams.clear() }
@@ -163,6 +166,10 @@ export function startHost(base: string, device: Device, options: {
   open()
   return {
     ready,
+    updatePeerCertificate(certificate: string) {
+      tls.setSecureContext({ key: device.key, cert: device.cert, ca: certificate,
+        minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' })
+    },
     stop() {
       if (stopped) return
       stopped = true
