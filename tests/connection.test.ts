@@ -152,3 +152,24 @@ test('rejected host credentials report a terminal state', { timeout: 5000 }, asy
   await assert.rejects(host.ready, /credential rejected/)
   assert.deepEqual(states, ['connecting', 'rejected'])
 })
+
+test('pairing TLS is kept separate from authenticated application sessions', { timeout: 5000 }, async t => {
+  const { pairing, url } = await setup(t)
+  let paired = 0
+  let unpaired = 0
+  const host = startHost(url, pairing.host, {
+    onConnection: stream => { paired++; stream.end('application') },
+    onPairingConnection: stream => { unpaired++; stream.end('pairing only') },
+  })
+  t.after(() => host.stop())
+  await host.ready
+  const viewer = await connectViewer(url, { ...pairing.viewer, key: '', cert: '' })
+  t.after(() => viewer.destroy())
+  assert.equal((await once(viewer, 'data'))[0].toString(), 'pairing only')
+  assert.equal(paired, 0)
+  assert.equal(unpaired, 1)
+  const authenticated = await connectViewer(url, pairing.viewer)
+  t.after(() => authenticated.destroy())
+  assert.equal((await once(authenticated, 'data'))[0].toString(), 'application')
+  assert.equal(paired, 1)
+})
