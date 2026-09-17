@@ -115,7 +115,7 @@ export function startHost(base: string, device: Device, options: {
   tls.on('tlsClientError', (error, stream) => { stream.destroy(); options.onError?.(error) })
   const disposeStreams = () => { for (const stream of streams) stream.destroy(); streams.clear() }
   async function accept(id: string, signal: AbortSignal) {
-    if (pending.has(id) || pending.size >= 4 || stopped) return
+    if (pending.has(id) || pending.size >= 100 || stopped) return
     pending.add(id)
     try {
       const raw = await transport(base, device.token, id, signal)

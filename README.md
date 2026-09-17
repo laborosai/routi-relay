@@ -43,16 +43,16 @@ The host requires the paired viewer certificate before delivering the stream to 
 
 `revokePair(id)` invalidates credentials and closes active sessions in memory. Persistent revocation currently requires removing the pair from the server configuration and restarting. The Mac must also revoke the trusted viewer identity during app integration so a compromised relay cannot restore access by itself.
 
-Limits: 100 sessions globally, 4 per pair, 1 MiB per WebSocket message, 2 MiB outgoing WebSocket buffer per peer, 10 seconds to join, and 30-second heartbeat checks. Over-budget sessions close instead of dropping bytes. Client TLS handshakes also time out. These are prototype limits, not subscription allowances or a measured capacity claim.
+Limits: 100 sessions globally, a bounded per-host allowance, 1 MiB per WebSocket message, 2 MiB outgoing WebSocket buffer per peer, 10 seconds to join, and 30-second heartbeat checks. Over-budget sessions close instead of dropping bytes. Client TLS handshakes also time out. These are prototype limits, not subscription allowances or a measured capacity claim.
 
 ## Next milestones
 
-1. Apple app enrollment: local key generation, QR pairing/approval, Keychain storage, durable device revocation.
-2. Adapt Routi chat and desktop viewing to the encrypted stream. Route requests only after device authentication. Desktop assets need a local bundle or explicit HTTP routing.
+1. Device certificate renewal and public enrollment.
+2. Desktop viewing over the encrypted stream; chat is integrated in Routi Core.
 3. Private hosted pilot: HTTPS, authentication rate limits, per-account traffic quotas, deployment and monitoring. Load-test normal and slow clients on a small VPS near users.
 4. Push notifications using the device registry, then subscription/trial enforcement.
 
-No iPhone/Mac app integration, public enrollment, billing or notifications are included yet. The tests exercise the real relay and TLS with simulated Node clients. A relay restart disconnects active viewers; closing a viewer must not stop the bot.
+Routi Core supplies the iPhone/iPad pairing and chat integration. Public enrollment, billing and notifications are not included yet. The tests exercise the real relay and TLS with simulated Node clients. A relay restart disconnects active viewers; closing a viewer must not stop the bot.
 
 ## License
 
