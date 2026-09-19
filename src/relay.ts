@@ -3,14 +3,16 @@ import { createServer } from 'node:http'
 import { WebSocket, WebSocketServer } from 'ws'
 
 type Role = 'host' | 'viewer'
-export type Pair = { id: string; hostHash: string; viewerHash: string }
+export type RegisteredDevice = { hostId: string; id: string; hash: string }
+export type Pair = { id: string; hostHash: string; viewerHash: string; maxDevices?: number }
 export const digest = (token: string) => createHash('sha256').update(token).digest('hex')
 
 export function createRelay(pairs: Pair[], options: {
   maxSessions?: number; maxPayload?: number; maxBuffered?: number;
   heartbeatMs?: number; waitMs?: number;
+  devices?: RegisteredDevice[]; saveDevices?: (devices: RegisteredDevice[]) => void;
 } = {}) {
-  const credentials = new Map<string, { pair: string; role: Role }>()
+  const credentials = new Map<string, { pair: string; role: Role; deviceId?: string }>()
   const ids = new Set<string>()
   for (const pair of pairs) {
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(pair.id) || ids.has(pair.id)) throw Error('Invalid or duplicate pair ID')
@@ -21,14 +23,75 @@ export function createRelay(pairs: Pair[], options: {
       credentials.set(hash, { pair: pair.id, role })
     }
   }
-  const server = createServer((req, res) => {
+  let devices = (options.devices ?? []).filter(device => ids.has(device.hostId))
+  const limits = new Map(pairs.map(pair => [pair.id, pair.maxDevices ?? 5]))
+  for (const limit of limits.values()) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw Error('Invalid device allowance')
+  }
+  for (const device of devices) {
+    if (!ids.has(device.hostId) || !/^[a-zA-Z0-9_-]{1,64}$/.test(device.id)
+        || !/^[a-f0-9]{64}$/.test(device.hash) || credentials.has(device.hash)
+        || devices.filter(d => d.hostId === device.hostId && d.id === device.id).length !== 1) throw Error('Invalid device registry')
+    credentials.set(device.hash, { pair: device.hostId, role: 'viewer', deviceId: device.id })
+  }
+  const server = createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store')
-    res.writeHead(req.url === '/health' ? 200 : 404).end(req.url === '/health' ? 'ok' : '')
+    const reply = (status: number, body: unknown = {}) => {
+      res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
+    }
+    if (req.url === '/health' && req.method === 'GET') { res.writeHead(200).end('ok'); return }
+    const route = req.url?.match(/^\/v1\/devices(?:\/([a-zA-Z0-9_-]{1,64}))?$/)
+    if (!route) { reply(404); return }
+    const token = req.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1]
+    const identity = token && credentials.get(digest(token))
+    if (!identity || identity.role !== 'host' || req.headers.origin) { reply(401); return }
+    const hostId = identity.pair
+    if (req.method === 'GET' && !route[1]) {
+      reply(200, { maxDevices: limits.get(hostId), devices: devices.filter(d => d.hostId === hostId).map(d => ({ id: d.id })) }); return
+    }
+    try {
+      if (req.method === 'POST' && !route[1]) {
+        let data = ''
+        for await (const chunk of req) {
+          data += chunk.toString()
+          if (Buffer.byteLength(data) > 4096) { reply(413); return }
+        }
+        let value: { id?: string; hash?: string }
+        try { value = JSON.parse(data) } catch { reply(400); return }
+        if (!value || typeof value.id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(value.id)
+            || typeof value.hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.hash)) { reply(400); return }
+        const existing = devices.find(d => d.hostId === hostId && d.id === value.id)
+        if (existing) { reply(existing.hash === value.hash ? 200 : 409); return }
+        if (credentials.has(value.hash)) { reply(409); return }
+        if (devices.filter(d => d.hostId === hostId).length >= limits.get(hostId)!) {
+          reply(409, { error: 'Device allowance reached. Revoke a device before pairing another.' }); return
+        }
+        const next = [...devices, { hostId, id: value.id, hash: value.hash }]
+        options.saveDevices?.(next)
+        devices = next
+        credentials.set(value.hash, { pair: hostId, role: 'viewer', deviceId: value.id })
+        reply(201); return
+      }
+      if (req.method === 'DELETE' && route[1]) {
+        const device = devices.find(d => d.hostId === hostId && d.id === route[1])
+        if (device) {
+          const next = devices.filter(d => d !== device)
+          options.saveDevices?.(next)
+          devices = next
+          credentials.delete(device.hash)
+          for (const [key, session] of sessions) {
+            if (key.startsWith(`${hostId}:`) && session.deviceId === device.id) dispose(key, session)
+          }
+        }
+        reply(200); return
+      }
+      reply(405)
+    } catch { if (!res.headersSent) reply(500) }
   })
   server.headersTimeout = 10_000
   server.requestTimeout = 10_000
   const wss = new WebSocketServer({ noServer: true, maxPayload: options.maxPayload ?? 1024 * 1024, perMessageDeflate: false })
-  type Session = { host?: WebSocket; viewer?: WebSocket; timer: NodeJS.Timeout }
+  type Session = { host?: WebSocket; viewer?: WebSocket; timer: NodeJS.Timeout; deviceId?: string }
   const sessions = new Map<string, Session>()
   const alive = new Set<WebSocket>()
   const hosts = new Map<string, WebSocket>()
@@ -90,7 +153,7 @@ export function createRelay(pairs: Pair[], options: {
     if (closing) { reject('503 Service Unavailable'); return }
     if (current?.[identity.role]) { reject('409 Conflict'); return }
     const pairSessions = [...sessions.keys()].filter(k => k.startsWith(`${identity.pair}:`)).length
-    if (!current && (sessions.size >= (options.maxSessions ?? 100) || pairSessions >= 4)) {
+    if (!current && (sessions.size >= (options.maxSessions ?? 100) || pairSessions >= (limits.get(identity.pair)! + 2) * 2)) {
       reject('429 Too Many Requests'); return
     }
     wss.handleUpgrade(req, socket, head, ws => {
@@ -102,6 +165,7 @@ export function createRelay(pairs: Pair[], options: {
       }
       const connected = session
       connected[identity.role] = ws
+      if (identity.role === 'viewer') connected.deviceId = identity.deviceId
       alive.add(ws)
       ws.on('pong', () => alive.add(ws))
       ws.on('error', () => dispose(key, connected))
@@ -130,6 +194,9 @@ export function createRelay(pairs: Pair[], options: {
   return {
     server,
     revokePair(id: string) {
+      const next = devices.filter(device => device.hostId !== id)
+      options.saveDevices?.(next)
+      devices = next
       for (const [hash, identity] of credentials) if (identity.pair === id) credentials.delete(hash)
       hosts.get(id)?.terminate()
       hosts.delete(id)

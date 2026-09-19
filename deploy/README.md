@@ -14,7 +14,7 @@ RELAY_PAIRS_FILE=/opt/routi-connect/config/relay.json
 TEST_CLIENT_IPS="YOUR_PUBLIC_IPV4/32 YOUR_PUBLIC_IPV6/128"
 ```
 
-Replace the IP placeholders with the actual public addresses of the test clients. Omit IPv6 if unused. Caddy applies this list to diagnostic routes. `/v1/host` and `/v1/sessions/*` accept any source IP but require valid provisioned credentials at the relay. Certificate issuance is managed by Caddy. Certificates persist in Docker volumes; access logs are not enabled.
+Replace the IP placeholders with the actual public addresses of the test clients. Omit IPv6 if unused. Caddy applies this list to diagnostic routes. `/v1/host`, `/v1/sessions/*`, and `/v1/devices` accept any source IP but require valid provisioned credentials at the relay. Device management requires the host credential. Certificate issuance is managed by Caddy. Certificates persist in Docker volumes; access logs are not enabled.
 
 ```sh
 cd /opt/routi-connect/app/deploy
@@ -34,3 +34,15 @@ This connects both simulated peers from the Mac through the hosted relay and che
 The service runs as a non-root user with a read-only filesystem, 256 MiB memory limit, no capabilities, bounded logs and no exposed backend port. These contain pilot resource usage but are not account billing quotas. The paired TLS connector chunks large writes into bounded WebSocket messages and preserves byte ordering.
 
 To stop: `docker compose down` (keep volumes for certificates). To revoke: remove the pair from relay.json and recreate the relay container. The Routi Core integration supports phone pairing and immediate chat revocation; certificate renewal and public enrollment remain separate work.
+
+Device registrations persist in the `relay-data` volume (`RELAY_DEVICES_FILE`),
+separately from the read-only host provisioning file. Each record stores a host ID,
+device ID, and credential hash. Back up this volume alongside the provisioning
+configuration; device private keys never belong on the relay.
+
+Set `maxDevices` on each entry in `relay.json` to its allowed device count (default
+five, supported range 1–50), then recreate the relay. The API rejects registrations
+above that allowance. This is an operator-set pilot entitlement, not subscription
+billing. Removing a device closes its sessions without disconnecting other devices.
+The original viewer token remains a bootstrap credential for the QR claim exchange.
+Session concurrency remains bounded independently of the device allowance.
