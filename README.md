@@ -45,14 +45,22 @@ The host requires the paired viewer certificate before delivering the stream to 
 
 Limits: 100 sessions globally, a bounded per-host allowance, 1 MiB per WebSocket message, 2 MiB outgoing WebSocket buffer per peer, 10 seconds to join, and 30-second heartbeat checks. Over-budget sessions close instead of dropping bytes. Client TLS handshakes also time out. These are prototype limits, not subscription allowances or a measured capacity claim.
 
-## Next milestones
+## Three-day Connect trials
 
-1. Device certificate renewal and public enrollment.
-2. Desktop viewing over the encrypted stream; chat is integrated in Routi Core.
-3. Private hosted pilot: HTTPS, authentication rate limits, per-account traffic quotas, deployment and monitoring. Load-test normal and slow clients on a small VPS near users.
-4. Push notifications using the device registry, then subscription/trial enforcement.
+Set `RELAY_TRIALS_FILE` to a writable JSON file and `RELAY_MAX_TRIALS` to the total
+number of enrollments to allow. Docker persists this in its data volume; enrollment
+is disabled by default and Caddy restricts `/v1/trial` to `TEST_CLIENT_IPS`.
 
-Routi Core supplies the iPhone/iPad pairing and chat integration. Public enrollment, billing and notifications are not included yet. The tests exercise the real relay and TLS with simulated Node clients. A relay restart disconnects active viewers; closing a viewer must not stop the bot.
+The Mac creates its keys locally and registers credential hashes. The first viewer
+connection starts a 72-hour deadline, shared by all paired devices. Restarting or
+re-pairing does not extend it. Expiration rejects new sessions and closes active
+streams; bots keep running on the Mac. `/v1/access` returns access status to an
+authenticated device. Existing manually provisioned pairs remain unrestricted.
+
+This is a bounded trial pilot, not billing or proof of a unique person. Someone
+creating new credentials can request another enrollment. Keep enrollment restricted
+until public abuse controls and bandwidth limits are in place. Certificates still
+need renewal for use beyond 30 days.
 
 ## License
 

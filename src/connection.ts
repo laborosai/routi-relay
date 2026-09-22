@@ -136,7 +136,7 @@ export function startHost(base: string, device: Device, options: {
     control = socket(base, device.token, '/v1/host')
     control.on('unexpected-response', (_request, response) => {
       response.resume()
-      rejected = response.statusCode === 401 || response.statusCode === 403
+      rejected = response.statusCode === 402 || response.statusCode === 401 || response.statusCode === 403
       if (rejected) {
         options.onState?.('rejected')
         rejectReady(Error('Host credential rejected; pair this device again'))

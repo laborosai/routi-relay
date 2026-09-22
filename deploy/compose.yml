@@ -9,6 +9,8 @@ services:
       PORT: 8787
       RELAY_PAIRS_FILE: /run/secrets/relay-pairs
       RELAY_DEVICES_FILE: /app/data/devices.json
+      RELAY_TRIALS_FILE: /app/data/trials.json
+      RELAY_MAX_TRIALS: ${RELAY_MAX_TRIALS:-0}
     volumes:
       - relay-data:/app/data
     secrets:

@@ -1,17 +1,27 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { WebSocket, WebSocketServer } from 'ws'
 
 type Role = 'host' | 'viewer'
 export type RegisteredDevice = { hostId: string; id: string; hash: string }
 export type Pair = { id: string; hostHash: string; viewerHash: string; maxDevices?: number }
+export type Trial = Pair & { expiresAt: number | null }
+const trialDuration = 3 * 24 * 60 * 60 * 1000
 export const digest = (token: string) => createHash('sha256').update(token).digest('hex')
 
 export function createRelay(pairs: Pair[], options: {
   maxSessions?: number; maxPayload?: number; maxBuffered?: number;
   heartbeatMs?: number; waitMs?: number;
+  trials?: Trial[]; saveTrials?: (trials: Trial[]) => void; maxTrials?: number;
   devices?: RegisteredDevice[]; saveDevices?: (devices: RegisteredDevice[]) => void;
 } = {}) {
+  let trials = options.trials ?? []
+  if (trials.some(trial => trial.expiresAt !== null && (!Number.isSafeInteger(trial.expiresAt) || trial.expiresAt <= 0))) throw Error('Invalid trial deadline')
+  pairs = [...pairs, ...trials]
+  const access = (id: string) => {
+    const trial = trials.find(trial => trial.id === id)
+    return { trial: !!trial, expiresAt: trial?.expiresAt ?? null, expired: trial?.expiresAt != null && trial.expiresAt <= Date.now() }
+  }
   const credentials = new Map<string, { pair: string; role: Role; deviceId?: string }>()
   const ids = new Set<string>()
   for (const pair of pairs) {
@@ -40,10 +50,46 @@ export function createRelay(pairs: Pair[], options: {
       res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
     }
     if (req.url === '/health' && req.method === 'GET') { res.writeHead(200).end('ok'); return }
-    const route = req.url?.match(/^\/v1\/devices(?:\/([a-zA-Z0-9_-]{1,64}))?$/)
-    if (!route) { reply(404); return }
     const token = req.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1]
     const identity = token && credentials.get(digest(token))
+    if (req.url === '/v1/access' && req.method === 'GET') {
+      if (!identity || req.headers.origin) { reply(401); return }
+      reply(200, access(identity.pair)); return
+    }
+    if (req.url === '/v1/trial' && req.method === 'POST') {
+      if (!token || req.headers.origin) { reply(401); return }
+      if (!options.saveTrials) { reply(503); return }
+      let data = ''
+      try {
+        for await (const chunk of req) {
+          data += chunk.toString()
+          if (Buffer.byteLength(data) > 1024) { reply(413); return }
+        }
+        let value: { viewerTokenHash?: string }
+        try { value = JSON.parse(data) } catch { reply(400); return }
+        if (!value || typeof value.viewerTokenHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.viewerTokenHash)) { reply(400); return }
+        // Re-check after reading: concurrent retries must not create a second trial.
+        const hash = digest(token)
+        const existing = credentials.get(hash)
+        if (existing) {
+          const trial = trials.find(trial => trial.id === existing.pair)
+          if (existing.role !== 'host' || !trial || trial.viewerHash !== value.viewerTokenHash) { reply(409); return }
+          reply(200, access(trial.id)); return
+        }
+        if (value.viewerTokenHash === hash || credentials.has(value.viewerTokenHash)) { reply(409); return }
+        if (trials.length >= (options.maxTrials ?? 100)) { reply(503); return }
+        const trial: Trial = { id: randomUUID(), hostHash: hash, viewerHash: value.viewerTokenHash, expiresAt: null }
+        const next = [...trials, trial]
+        options.saveTrials(next)
+        trials = next
+        credentials.set(hash, { pair: trial.id, role: 'host' })
+        credentials.set(trial.viewerHash, { pair: trial.id, role: 'viewer' })
+        limits.set(trial.id, 5)
+        reply(201, access(trial.id)); return
+      } catch { if (!res.headersSent) reply(500); return }
+    }
+    const route = req.url?.match(/^\/v1\/devices(?:\/([a-zA-Z0-9_-]{1,64}))?$/)
+    if (!route) { reply(404); return }
     if (!identity || identity.role !== 'host' || req.headers.origin) { reply(401); return }
     const hostId = identity.pair
     if (req.method === 'GET' && !route[1]) {
@@ -51,6 +97,7 @@ export function createRelay(pairs: Pair[], options: {
     }
     try {
       if (req.method === 'POST' && !route[1]) {
+        if (access(hostId).expired) { reply(402); return }
         let data = ''
         for await (const chunk of req) {
           data += chunk.toString()
@@ -105,6 +152,8 @@ export function createRelay(pairs: Pair[], options: {
     }
   }
   const heartbeat = setInterval(() => {
+    for (const [id, host] of hosts) if (access(id).expired) host.terminate()
+    for (const [key, session] of sessions) if (access(key.split(':')[0]!).expired) dispose(key, session)
     for (const ws of wss.clients) {
       if (!alive.delete(ws)) ws.terminate()
       else ws.ping()
@@ -118,6 +167,7 @@ export function createRelay(pairs: Pair[], options: {
     const token = req.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1]
     const identity = token && credentials.get(digest(token))
     if (!identity || req.headers.origin) { reject('401 Unauthorized'); return }
+    if (access(identity.pair).expired) { reject('402 Payment Required'); return }
     if (closing) { reject('503 Service Unavailable'); return }
     if (req.url === '/v1/host') {
       if (identity.role !== 'host') { reject('403 Forbidden'); return }
@@ -156,6 +206,17 @@ export function createRelay(pairs: Pair[], options: {
     if (!current && (sessions.size >= (options.maxSessions ?? 100) || pairSessions >= (limits.get(identity.pair)! + 2) * 2)) {
       reject('429 Too Many Requests'); return
     }
+    // The first remote device connection starts the trial, never merely opening the Mac app.
+    const trial = trials.find(trial => trial.id === identity.pair)
+    if (trial && trial.expiresAt === null && identity.role === 'viewer') {
+      if (!hosts.has(identity.pair)) { reject('503 Service Unavailable'); return }
+      const next = trials.map(item => item === trial ? { ...item, expiresAt: Date.now() + trialDuration } : item)
+      try {
+        if (!options.saveTrials) throw Error('Trial storage unavailable')
+        options.saveTrials(next)
+      } catch { reject('503 Service Unavailable'); return }
+      trials = next
+    }
     wss.handleUpgrade(req, socket, head, ws => {
       let session = current
       if (!session) {
@@ -171,6 +232,7 @@ export function createRelay(pairs: Pair[], options: {
       ws.on('error', () => dispose(key, connected))
       ws.on('close', () => dispose(key, connected))
       ws.on('message', (data, isBinary) => {
+        if (access(identity.pair).expired) { dispose(key, connected); return }
         const other = identity.role === 'host' ? connected.viewer : connected.host
         const bytes = Array.isArray(data) ? data.reduce((sum, part) => sum + part.length, 0) : data.byteLength
         // Preserve message boundaries and order. Close stalled sessions rather than drop VNC bytes.
