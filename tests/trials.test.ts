@@ -58,6 +58,8 @@ test('trial starts with the first phone connection, persists, and closes only ex
   assert.deepEqual(await (await api(mac, '/v1/access')).json(), { trial: true, expiresAt: deadline, expired: true })
   assert.equal((await enroll()).status, 200)
   assert.equal(saved[0]!.expiresAt, deadline)
+  const bootstrap = socket(phone, '/v1/sessions/bootstrap')
+  assert.match(String((await once(bootstrap, 'error'))[0]), /402/)
   const rejected = socket(registeredPhone, '/v1/sessions/again')
   assert.match(String((await once(rejected, 'error'))[0]), /402/)
   const received = once(unaffected.b, 'message')

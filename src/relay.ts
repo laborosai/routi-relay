@@ -205,6 +205,7 @@ export function createRelay(pairs: Pair[], options: {
   const sessions = new Map<string, Session>()
   const alive = new Set<WebSocket>()
   const hosts = new Map<string, WebSocket>()
+  const pairingHosts = new Set<string>()
   let closing = false
   const dispose = (key: string, session: Session) => {
     if (sessions.get(key) !== session) return
@@ -245,12 +246,14 @@ export function createRelay(pairs: Pair[], options: {
       if (hosts.has(identity.pair)) { reject('409 Conflict'); return }
       wss.handleUpgrade(req, socket, head, ws => {
         hosts.set(identity.pair, ws)
+        if (req.headers['x-routi-pairing-isolation'] === '1') pairingHosts.add(identity.pair)
         alive.add(ws)
         ws.on('pong', () => alive.add(ws))
         const cleanup = () => {
           alive.delete(ws)
           if (hosts.get(identity.pair) !== ws) return
           hosts.delete(identity.pair)
+          pairingHosts.delete(identity.pair)
           for (const [key, session] of sessions) {
             if (key.startsWith(`${identity.pair}:`)) dispose(key, session)
           }
@@ -261,7 +264,7 @@ export function createRelay(pairs: Pair[], options: {
         ws.send('{"type":"registered"}')
         for (const [key, session] of sessions) {
           if (key.startsWith(`${identity.pair}:`) && session.viewer && !session.host) {
-            ws.send(JSON.stringify({ type: 'session', id: key.split(':')[1] }))
+            ws.send(JSON.stringify({ type: 'session', id: key.split(':')[1], pairing: !session.deviceId && trials.some(t => t.id === identity.pair) }))
           }
         }
       })
@@ -274,7 +277,7 @@ export function createRelay(pairs: Pair[], options: {
     // Expired Macs keep their control connection and can pair a replacement device.
     // The bootstrap credential reaches Core's pairing-only TLS handler, never chat/VNC.
     if (access(identity.pair).expired && (identity.role === 'viewer'
-        ? !!identity.deviceId : !current?.viewer || !!current.deviceId)) {
+        ? !!identity.deviceId || !pairingHosts.has(identity.pair) : !current?.viewer || !!current.deviceId)) {
       reject('402 Payment Required'); return
     }
     if (closing) { reject('503 Service Unavailable'); return }
@@ -319,7 +322,7 @@ export function createRelay(pairs: Pair[], options: {
       })
       if (identity.role === 'viewer' && !connected.host) {
         const host = hosts.get(identity.pair)
-        if (host?.readyState === WebSocket.OPEN) host.send(JSON.stringify({ type: 'session', id: match[1] }))
+        if (host?.readyState === WebSocket.OPEN) host.send(JSON.stringify({ type: 'session', id: match[1], pairing: !identity.deviceId && trials.some(t => t.id === identity.pair) }))
       }
       // Control message occurs only before the data phase; both clients must await it.
       if (connected.host && connected.viewer) {

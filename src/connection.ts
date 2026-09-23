@@ -14,8 +14,8 @@ function endpoint(base: string, path: string) {
   return url
 }
 
-function socket(base: string, token: string, path: string) {
-  return new WebSocket(endpoint(base, path), { headers: { Authorization: `Bearer ${token}` },
+function socket(base: string, token: string, path: string, pairingIsolation = false) {
+  return new WebSocket(endpoint(base, path), { headers: { Authorization: `Bearer ${token}`, ...(pairingIsolation ? { 'X-Routi-Pairing-Isolation': '1' } : {}) },
     maxPayload: 1024 * 1024, perMessageDeflate: false, handshakeTimeout: 10_000 })
 }
 
@@ -105,16 +105,22 @@ export function startHost(base: string, device: Device, options: {
   const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject })
   // Callers may use the ready promise or simply leave the connector running.
   void ready.catch(() => {})
-  const tls = createServer({ key: device.key, cert: device.cert, ca: device.peerCert,
-    requestCert: true, rejectUnauthorized: !options.onPairingConnection, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3', handshakeTimeout: 10_000 }, stream => {
+  const tlsOptions = { key: device.key, cert: device.cert, ca: device.peerCert,
+    requestCert: true, rejectUnauthorized: !options.onPairingConnection, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3', handshakeTimeout: 10_000 } as const
+  const tls = createServer(tlsOptions, stream => {
     stream.on('error', error => options.onError?.(error))
     if (stream.authorized) options.onConnection(stream)
     else if (options.onPairingConnection) options.onPairingConnection(stream)
     else stream.destroy()
   })
+  const pairingTls = options.onPairingConnection ? createServer(tlsOptions, stream => {
+    stream.on('error', error => options.onError?.(error))
+    options.onPairingConnection!(stream)
+  }) : undefined
+  pairingTls?.on('tlsClientError', (_error, stream) => stream.destroy())
   tls.on('tlsClientError', (error, stream) => { stream.destroy(); options.onError?.(error) })
   const disposeStreams = () => { for (const stream of streams) stream.destroy(); streams.clear() }
-  async function accept(id: string, signal: AbortSignal) {
+  async function accept(id: string, signal: AbortSignal, pairingOnly: boolean) {
     if (pending.has(id) || pending.size >= 100 || stopped) return
     pending.add(id)
     try {
@@ -124,7 +130,9 @@ export function startHost(base: string, device: Device, options: {
       raw.on('error', error => options.onError?.(error))
       raw.once('close', () => { streams.delete(raw); pending.delete(id) })
       // Node's TLS server accepts a Duplex transport without opening a listening port.
-      tls.emit('connection', raw)
+      const server = pairingOnly ? pairingTls : tls
+      if (server) server.emit('connection', raw)
+      else raw.destroy()
     } catch (error) { pending.delete(id); if (!stopped) options.onError?.(error as Error) }
   }
   function open() {
@@ -133,7 +141,7 @@ export function startHost(base: string, device: Device, options: {
     const active = attempt
     let rejected = false
     options.onState?.('connecting')
-    control = socket(base, device.token, '/v1/host')
+    control = socket(base, device.token, '/v1/host', !!options.onPairingConnection)
     control.on('unexpected-response', (_request, response) => {
       response.resume()
       rejected = response.statusCode === 402 || response.statusCode === 401 || response.statusCode === 403
@@ -150,7 +158,7 @@ export function startHost(base: string, device: Device, options: {
         const message = JSON.parse(data.toString())
         if (message.type === 'registered') { failures = 0; options.onState?.('connected'); resolveReady(); return }
         if (message.type !== 'session' || typeof message.id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(message.id)) throw Error('Invalid session request')
-        void accept(message.id, active.signal)
+        void accept(message.id, active.signal, message.pairing === true)
       } catch { control.terminate() }
     })
     control.on('close', () => {
@@ -180,6 +188,7 @@ export function startHost(base: string, device: Device, options: {
       control.terminate()
       disposeStreams()
       tls.close()
+      pairingTls?.close()
     },
   }
 }

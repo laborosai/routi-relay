@@ -3,7 +3,7 @@ import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 import { test, type TestContext } from 'node:test'
 import { createPairing } from '../src/pairing.js'
-import { createRelay } from '../src/relay.js'
+import { createRelay, digest } from '../src/relay.js'
 import { connectViewer, startHost } from '../src/connection.js'
 
 async function setup(t: TestContext) {
@@ -172,4 +172,32 @@ test('pairing TLS is kept separate from authenticated application sessions', { t
   t.after(() => authenticated.destroy())
   assert.equal((await once(authenticated, 'data'))[0].toString(), 'application')
   assert.equal(paired, 1)
+})
+
+
+test('an expired trial QR credential reaches only pairing, even with a valid phone certificate', { timeout: 5000 }, async t => {
+  const pairing = await createPairing()
+  const phoneToken = 'p'.repeat(43)
+  const relay = createRelay([], {
+    trials: [{ ...pairing.relay, expiresAt: Date.now() - 1000 }],
+    devices: [{ hostId: pairing.relay.id, id: 'phone', hash: digest(phoneToken) }],
+  })
+  relay.server.listen(0, '127.0.0.1')
+  await once(relay.server, 'listening')
+  t.after(() => relay.close())
+  const url = `ws://127.0.0.1:${(relay.server.address() as AddressInfo).port}`
+  let applicationCalls = 0
+  const host = startHost(url, pairing.host, {
+    onConnection: stream => { applicationCalls++; stream.end('application') },
+    onPairingConnection: stream => stream.end('pairing only'),
+  })
+  t.after(() => host.stop())
+  await host.ready
+  for (const credentials of [pairing.viewer, { ...pairing.viewer, key: '', cert: '' }]) {
+    const viewer = await connectViewer(url, credentials)
+    t.after(() => viewer.destroy())
+    assert.equal((await once(viewer, 'data'))[0].toString(), 'pairing only')
+  }
+  await assert.rejects(connectViewer(url, { ...pairing.viewer, token: phoneToken }), /402/)
+  assert.equal(applicationCalls, 0)
 })
