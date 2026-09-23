@@ -65,3 +65,39 @@ need renewal for use beyond 30 days.
 ## License
 
 Copyright 2026 Laboros AI, Inc. Licensed under the [Apache License, Version 2.0](LICENSE).
+
+### Apple subscriptions
+
+Use Apple StoreKit and the App Store Server API directly. A one-Mac subscription
+is bound to the authenticated pairing, not to a name or email. Restore preserves
+that assignment. Additional Mac plans and transfers are not implemented yet.
+
+Create the monthly `com.routibot.connect.monthly` subscription in App Store Connect
+and configure Notifications V2 at `https://<relay>/v1/apple-notifications`.
+Keep the In-App Purchase API key and configuration outside the repository:
+
+```json
+{
+  "bundleId": "your.app.bundle",
+  "appAppleId": 123456789,
+  "productId": "com.routibot.connect.monthly",
+  "sandbox": true,
+  "issuerId": "your-issuer-id",
+  "keyId": "your-key-id",
+  "keyFile": "/run/apple/key.p8",
+  "rootFiles": ["/run/apple/AppleRootCA-G3.cer"]
+}
+```
+
+Download the root certificate from [Apple PKI](https://www.apple.com/certificateauthority/).
+Set `RELAY_APPLE_CONFIG` to this file and `RELAY_SUBSCRIPTIONS_FILE` to persistent
+storage. Docker deployments can add `deploy/compose.billing.yml`, with
+`RELAY_APPLE_DIRECTORY` containing `config.json`, the key, and root certificates.
+Use a separate sandbox deployment for TestFlight; production must set `sandbox`
+to false. Never accept sandbox or Xcode-signed purchases on the paid production relay.
+
+Signed purchases and notifications are checked with Apple's server library.
+The API supplies current subscription status, including billing grace periods;
+replaying an old purchase cannot undo a refund. Notifications and five-minute
+reconciliation update access. Cancellation retains access until the paid period
+ends. App Store outages retain the last verified deadline, without extending it.

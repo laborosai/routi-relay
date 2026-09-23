@@ -1,7 +1,7 @@
 {$RELAY_DOMAIN} {
     # Devices may move between Wi-Fi and cellular. These routes still require
     # bearer credentials at the relay; enrollment stays limited to test clients.
-    @devices path /v1/access /v1/host /v1/sessions/* /v1/devices /v1/devices/*
+    @devices path /v1/access /v1/subscription /v1/apple-notifications /v1/host /v1/sessions/* /v1/devices /v1/devices/*
     handle @devices {
         reverse_proxy relay:8787
     }

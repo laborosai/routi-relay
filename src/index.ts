@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { createRelay, type Pair, type Trial, type RegisteredDevice } from './relay.js'
 
+import { appleBilling, type Subscription } from './subscriptions.js'
+
 const path = process.env.RELAY_PAIRS_FILE
 if (!path) throw Error('Set RELAY_PAIRS_FILE to your relay pair configuration')
 const pairs: Pair[] = JSON.parse(await readFile(path, 'utf8'))
@@ -20,7 +22,21 @@ if (trialPath) {
 }
 const maxTrials = Number(process.env.RELAY_MAX_TRIALS ?? 100)
 if (!Number.isInteger(maxTrials) || maxTrials < 0) throw Error('Invalid RELAY_MAX_TRIALS')
+const billingConfig = process.env.RELAY_APPLE_CONFIG
+const billing = billingConfig ? appleBilling(JSON.parse(readFileSync(billingConfig, 'utf8'))) : undefined
+const subscriptionPath = process.env.RELAY_SUBSCRIPTIONS_FILE
+if (billing && !subscriptionPath) throw Error('Set RELAY_SUBSCRIPTIONS_FILE for Apple billing')
+let subscriptions: Subscription[] = []
+if (subscriptionPath) {
+  try { subscriptions = JSON.parse(readFileSync(subscriptionPath, 'utf8')) }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+}
 const relay = createRelay(pairs, {
+  billing, subscriptions,
+  saveSubscriptions: subscriptionPath ? next => {
+    writeFileSync(`${subscriptionPath}.next`, JSON.stringify(next), { mode: 0o600 })
+    renameSync(`${subscriptionPath}.next`, subscriptionPath)
+  } : undefined,
   devices, trials, maxTrials,
   saveTrials: trialPath ? next => {
     writeFileSync(`${trialPath}.next`, JSON.stringify(next), { mode: 0o600 })
