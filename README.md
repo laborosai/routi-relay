@@ -43,7 +43,7 @@ The host requires the paired viewer certificate before delivering the stream to 
 
 `revokePair(id)` invalidates credentials and closes active sessions in memory. Persistent revocation currently requires removing the pair from the server configuration and restarting. The Mac must also revoke the trusted viewer identity during app integration so a compromised relay cannot restore access by itself.
 
-Limits: 100 sessions globally, a bounded per-host allowance, 1 MiB per WebSocket message, 2 MiB outgoing WebSocket buffer per peer, 10 seconds to join, and 30-second heartbeat checks. Over-budget sessions close instead of dropping bytes. Client TLS handshakes also time out. These are prototype limits, not subscription allowances or a measured capacity claim.
+Limits: 100 sessions globally, 1 MiB per WebSocket message, 2 MiB outgoing WebSocket buffer per peer, 10 seconds to join, and 30-second heartbeat checks. Over-budget sessions close instead of dropping bytes. Client TLS handshakes also time out. These are prototype limits, not subscription allowances or a measured capacity claim.
 
 ## Three-day Connect trials
 
@@ -53,11 +53,11 @@ is disabled by default and Caddy restricts `/v1/trial` to `TEST_CLIENT_IPS`.
 
 The Mac creates its keys locally and registers credential hashes. The first viewer
 connection starts a 72-hour deadline, shared by all paired devices. Restarting or
-re-pairing does not extend it. Expiration rejects new sessions and closes active
-streams; bots keep running on the Mac. `/v1/access` returns access status to an
+re-pairing does not extend it. Expiration blocks chat and desktop streams; the control connection and pairing
+remain available so a replacement device can restore purchases. Bots keep running. `/v1/access` returns access status to an
 authenticated device. Existing manually provisioned pairs remain unrestricted.
 
-This is a bounded trial pilot, not billing or proof of a unique person. Someone
+Trial enrollment is a bounded pilot, not proof of a unique person. Someone
 creating new credentials can request another enrollment. Keep enrollment restricted
 until public abuse controls and bandwidth limits are in place. Certificates still
 need renewal for use beyond 30 days.
