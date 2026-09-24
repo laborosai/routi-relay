@@ -2,6 +2,14 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { WebSocket, WebSocketServer } from 'ws'
 
+import type { AppleBilling, Subscription } from './subscriptions.js'
+
+// Stable, opaque purchase identifier; it is not an authentication credential.
+export const purchaseToken = (macId: string) => {
+  const hex = digest(`routi-subscription:${macId}`)
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+}
+
 type Role = 'host' | 'viewer'
 export type RegisteredDevice = { hostId: string; id: string; hash: string }
 export type Pair = { id: string; hostHash: string; viewerHash: string; maxDevices?: number }
@@ -12,15 +20,35 @@ export const digest = (token: string) => createHash('sha256').update(token).dige
 export function createRelay(pairs: Pair[], options: {
   maxSessions?: number; maxPayload?: number; maxBuffered?: number;
   heartbeatMs?: number; waitMs?: number;
+  billing?: AppleBilling; subscriptions?: Subscription[]; saveSubscriptions?: (subscriptions: Subscription[]) => void;
   trials?: Trial[]; saveTrials?: (trials: Trial[]) => void; maxTrials?: number;
   devices?: RegisteredDevice[]; saveDevices?: (devices: RegisteredDevice[]) => void;
 } = {}) {
+  let subscriptions = options.subscriptions ?? []
+  if (options.billing && !options.saveSubscriptions) throw Error('Subscription storage required')
+  const refreshing = new Map<string, Promise<void>>()
+  const refreshSubscription = (record: Subscription) => {
+    const existing = refreshing.get(record.originalTransactionId)
+    if (existing) return existing
+    const work = (async () => {
+      const expiresAt = await options.billing!.expiration(record.originalTransactionId, purchaseToken(record.macId))
+      const next = [...subscriptions.filter(s => s.originalTransactionId !== record.originalTransactionId), { ...record, expiresAt }]
+      options.saveSubscriptions!(next)
+      subscriptions = next
+    })().finally(() => refreshing.delete(record.originalTransactionId))
+    refreshing.set(record.originalTransactionId, work)
+    return work
+  }
   let trials = options.trials ?? []
   if (trials.some(trial => trial.expiresAt !== null && (!Number.isSafeInteger(trial.expiresAt) || trial.expiresAt <= 0))) throw Error('Invalid trial deadline')
   pairs = [...pairs, ...trials]
   const access = (id: string) => {
     const trial = trials.find(trial => trial.id === id)
-    return { trial: !!trial, expiresAt: trial?.expiresAt ?? null, expired: trial?.expiresAt != null && trial.expiresAt <= Date.now() }
+    const paidUntil = Math.max(0, ...subscriptions.filter(s => s.macId === id).map(s => s.expiresAt))
+    const paid = paidUntil > Date.now()
+    const expiresAt = paid ? Math.max(paidUntil, trial?.expiresAt ?? 0) : trial?.expiresAt ?? null
+    return { trial: !!trial && !paid, expiresAt, expired: !paid && trial?.expiresAt != null && trial.expiresAt <= Date.now(),
+      ...(options.billing ? { billing: { productId: options.billing.productId, appAccountToken: purchaseToken(id), subscribed: paid } } : {}) }
   }
   const credentials = new Map<string, { pair: string; role: Role; deviceId?: string }>()
   const ids = new Set<string>()
@@ -34,9 +62,9 @@ export function createRelay(pairs: Pair[], options: {
     }
   }
   let devices = (options.devices ?? []).filter(device => ids.has(device.hostId))
-  const limits = new Map(pairs.map(pair => [pair.id, pair.maxDevices ?? 5]))
+  const limits = new Map(pairs.map(pair => [pair.id, pair.maxDevices ?? null]))
   for (const limit of limits.values()) {
-    if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw Error('Invalid device allowance')
+    if (limit !== null && (!Number.isInteger(limit) || limit < 1 || limit > 50)) throw Error('Invalid device allowance')
   }
   for (const device of devices) {
     if (!ids.has(device.hostId) || !/^[a-zA-Z0-9_-]{1,64}$/.test(device.id)
@@ -44,6 +72,7 @@ export function createRelay(pairs: Pair[], options: {
         || devices.filter(d => d.hostId === device.hostId && d.id === device.id).length !== 1) throw Error('Invalid device registry')
     credentials.set(device.hash, { pair: device.hostId, role: 'viewer', deviceId: device.id })
   }
+  let billingRequests = 0
   const server = createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store')
     const reply = (status: number, body: unknown = {}) => {
@@ -51,10 +80,45 @@ export function createRelay(pairs: Pair[], options: {
     }
     if (req.url === '/health' && req.method === 'GET') { res.writeHead(200).end('ok'); return }
     const token = req.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1]
-    const identity = token && credentials.get(digest(token))
+    const identity = token ? credentials.get(digest(token)) : undefined
     if (req.url === '/v1/access' && req.method === 'GET') {
       if (!identity || req.headers.origin) { reply(401); return }
       reply(200, access(identity.pair)); return
+    }
+    if (req.method === 'POST' && ['/v1/subscription', '/v1/apple-notifications'].includes(req.url ?? '')) {
+      if (!options.billing) { reply(503); return }
+      if (req.headers.origin) { reply(401); return }
+      const claim = req.url === '/v1/subscription'
+      if (claim && (!identity || identity.role !== 'viewer' || !identity.deviceId)) { reply(401); return }
+      if (billingRequests >= 8) { reply(429); return }
+      billingRequests++
+      let data = ''
+      try {
+        for await (const chunk of req) {
+          data += chunk.toString()
+          if (Buffer.byteLength(data) > 32768) { reply(413); return }
+        }
+        let payload: { signedPayload?: string }
+        try { payload = JSON.parse(data) } catch { reply(400); return }
+        if (!payload || typeof payload.signedPayload !== 'string') { reply(400); return }
+        let originalTransactionId: string | undefined
+        try {
+          if (claim) {
+            const purchase = await options.billing.transaction(payload.signedPayload)
+            if (purchase.appAccountToken !== purchaseToken(identity!.pair)) {
+              reply(409, { error: 'This subscription covers another Mac. Restore it on that Mac.' }); return
+            }
+            originalTransactionId = purchase.originalTransactionId
+          } else originalTransactionId = await options.billing.notification(payload.signedPayload)
+        } catch { reply(400, { error: 'Apple purchase could not be verified.' }); return }
+        if (!originalTransactionId) { reply(200); return }
+        const existing = subscriptions.find(s => s.originalTransactionId === originalTransactionId)
+        if (claim && existing && existing.macId !== identity!.pair) { reply(409); return }
+        const record = existing ?? (claim ? { originalTransactionId, macId: identity!.pair, expiresAt: 0 } : undefined)
+        if (record) await refreshSubscription(record)
+        reply(200, claim ? access(identity!.pair) : {}); return
+      } catch { if (!res.headersSent) reply(503, { error: 'Could not confirm Connect access. Please try again.' }); return }
+      finally { billingRequests-- }
     }
     if (req.url === '/v1/trial' && req.method === 'POST') {
       if (!token || req.headers.origin) { reply(401); return }
@@ -84,7 +148,7 @@ export function createRelay(pairs: Pair[], options: {
         trials = next
         credentials.set(hash, { pair: trial.id, role: 'host' })
         credentials.set(trial.viewerHash, { pair: trial.id, role: 'viewer' })
-        limits.set(trial.id, 5)
+        limits.set(trial.id, null)
         reply(201, access(trial.id)); return
       } catch { if (!res.headersSent) reply(500); return }
     }
@@ -97,7 +161,6 @@ export function createRelay(pairs: Pair[], options: {
     }
     try {
       if (req.method === 'POST' && !route[1]) {
-        if (access(hostId).expired) { reply(402); return }
         let data = ''
         for await (const chunk of req) {
           data += chunk.toString()
@@ -110,7 +173,7 @@ export function createRelay(pairs: Pair[], options: {
         const existing = devices.find(d => d.hostId === hostId && d.id === value.id)
         if (existing) { reply(existing.hash === value.hash ? 200 : 409); return }
         if (credentials.has(value.hash)) { reply(409); return }
-        if (devices.filter(d => d.hostId === hostId).length >= limits.get(hostId)!) {
+        if (limits.get(hostId) != null && devices.filter(d => d.hostId === hostId).length >= limits.get(hostId)!) {
           reply(409, { error: 'Device allowance reached. Revoke a device before pairing another.' }); return
         }
         const next = [...devices, { hostId, id: value.id, hash: value.hash }]
@@ -142,6 +205,7 @@ export function createRelay(pairs: Pair[], options: {
   const sessions = new Map<string, Session>()
   const alive = new Set<WebSocket>()
   const hosts = new Map<string, WebSocket>()
+  const pairingHosts = new Set<string>()
   let closing = false
   const dispose = (key: string, session: Session) => {
     if (sessions.get(key) !== session) return
@@ -151,9 +215,18 @@ export function createRelay(pairs: Pair[], options: {
       if (ws) { alive.delete(ws); ws.terminate() }
     }
   }
+  // Notifications normally update access immediately; reconcile missed deliveries too.
+  const reconcile = async () => {
+    for (const record of subscriptions) {
+      if (closing) return
+      try { await refreshSubscription(record) } catch { console.error('Apple subscription refresh failed') }
+    }
+  }
+  const billingTimer = options.billing ? setInterval(() => { void reconcile() }, 5 * 60_000) : undefined
+  billingTimer?.unref()
+  if (options.billing) void reconcile()
   const heartbeat = setInterval(() => {
-    for (const [id, host] of hosts) if (access(id).expired) host.terminate()
-    for (const [key, session] of sessions) if (access(key.split(':')[0]!).expired) dispose(key, session)
+    for (const [key, session] of sessions) if (access(key.split(':')[0]!).expired && session.deviceId) dispose(key, session)
     for (const ws of wss.clients) {
       if (!alive.delete(ws)) ws.terminate()
       else ws.ping()
@@ -165,21 +238,22 @@ export function createRelay(pairs: Pair[], options: {
     const reject = (status: string) => socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
     // Native clients use headers. Never accept credentials in URLs or browser origins.
     const token = req.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1]
-    const identity = token && credentials.get(digest(token))
+    const identity = token ? credentials.get(digest(token)) : undefined
     if (!identity || req.headers.origin) { reject('401 Unauthorized'); return }
-    if (access(identity.pair).expired) { reject('402 Payment Required'); return }
     if (closing) { reject('503 Service Unavailable'); return }
     if (req.url === '/v1/host') {
       if (identity.role !== 'host') { reject('403 Forbidden'); return }
       if (hosts.has(identity.pair)) { reject('409 Conflict'); return }
       wss.handleUpgrade(req, socket, head, ws => {
         hosts.set(identity.pair, ws)
+        if (req.headers['x-routi-pairing-isolation'] === '1') pairingHosts.add(identity.pair)
         alive.add(ws)
         ws.on('pong', () => alive.add(ws))
         const cleanup = () => {
           alive.delete(ws)
           if (hosts.get(identity.pair) !== ws) return
           hosts.delete(identity.pair)
+          pairingHosts.delete(identity.pair)
           for (const [key, session] of sessions) {
             if (key.startsWith(`${identity.pair}:`)) dispose(key, session)
           }
@@ -190,7 +264,7 @@ export function createRelay(pairs: Pair[], options: {
         ws.send('{"type":"registered"}')
         for (const [key, session] of sessions) {
           if (key.startsWith(`${identity.pair}:`) && session.viewer && !session.host) {
-            ws.send(JSON.stringify({ type: 'session', id: key.split(':')[1] }))
+            ws.send(JSON.stringify({ type: 'session', id: key.split(':')[1], pairing: !session.deviceId && trials.some(t => t.id === identity.pair) }))
           }
         }
       })
@@ -200,10 +274,15 @@ export function createRelay(pairs: Pair[], options: {
     if (!match) { reject('404 Not Found'); return }
     const key = `${identity.pair}:${match[1]}`
     const current = sessions.get(key)
+    // Expired Macs keep their control connection and can pair a replacement device.
+    // The bootstrap credential reaches Core's pairing-only TLS handler, never chat/VNC.
+    if (access(identity.pair).expired && (identity.role === 'viewer'
+        ? !!identity.deviceId || !pairingHosts.has(identity.pair) : !current?.viewer || !!current.deviceId)) {
+      reject('402 Payment Required'); return
+    }
     if (closing) { reject('503 Service Unavailable'); return }
     if (current?.[identity.role]) { reject('409 Conflict'); return }
-    const pairSessions = [...sessions.keys()].filter(k => k.startsWith(`${identity.pair}:`)).length
-    if (!current && (sessions.size >= (options.maxSessions ?? 100) || pairSessions >= (limits.get(identity.pair)! + 2) * 2)) {
+    if (!current && sessions.size >= (options.maxSessions ?? 100)) {
       reject('429 Too Many Requests'); return
     }
     // The first remote device connection starts the trial, never merely opening the Mac app.
@@ -232,7 +311,7 @@ export function createRelay(pairs: Pair[], options: {
       ws.on('error', () => dispose(key, connected))
       ws.on('close', () => dispose(key, connected))
       ws.on('message', (data, isBinary) => {
-        if (access(identity.pair).expired) { dispose(key, connected); return }
+        if (access(identity.pair).expired && connected.deviceId) { dispose(key, connected); return }
         const other = identity.role === 'host' ? connected.viewer : connected.host
         const bytes = Array.isArray(data) ? data.reduce((sum, part) => sum + part.length, 0) : data.byteLength
         // Preserve message boundaries and order. Close stalled sessions rather than drop VNC bytes.
@@ -243,7 +322,7 @@ export function createRelay(pairs: Pair[], options: {
       })
       if (identity.role === 'viewer' && !connected.host) {
         const host = hosts.get(identity.pair)
-        if (host?.readyState === WebSocket.OPEN) host.send(JSON.stringify({ type: 'session', id: match[1] }))
+        if (host?.readyState === WebSocket.OPEN) host.send(JSON.stringify({ type: 'session', id: match[1], pairing: !identity.deviceId && trials.some(t => t.id === identity.pair) }))
       }
       // Control message occurs only before the data phase; both clients must await it.
       if (connected.host && connected.viewer) {
@@ -268,6 +347,7 @@ export function createRelay(pairs: Pair[], options: {
     async close() {
       closing = true
       clearInterval(heartbeat)
+      clearInterval(billingTimer)
       for (const host of hosts.values()) host.terminate()
       hosts.clear()
       for (const [key, session] of sessions) dispose(key, session)

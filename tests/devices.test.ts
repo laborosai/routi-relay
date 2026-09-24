@@ -72,5 +72,18 @@ test('failed persistence does not grant a device access', async t => {
   const url = `http://127.0.0.1:${(relay.server.address() as AddressInfo).port}/v1/devices`
   const headers = { Authorization: `Bearer ${host}` }
   assert.equal((await fetch(url, { method: 'POST', headers, body: JSON.stringify({ id: 'phone', hash: digest(token()) }) })).status, 500)
-  assert.deepEqual(await (await fetch(url, { headers })).json(), { maxDevices: 5, devices: [] })
+  assert.deepEqual(await (await fetch(url, { headers })).json(), { maxDevices: null, devices: [] })
+})
+
+test('the default plan does not impose a five-device allowance', async t => {
+  const host = token()
+  const relay = createRelay([{ id: 'mac', hostHash: digest(host), viewerHash: digest(token()) }], { saveDevices: () => {} })
+  relay.server.listen(0, '127.0.0.1'); await once(relay.server, 'listening')
+  t.after(() => relay.close())
+  const url = `http://127.0.0.1:${(relay.server.address() as AddressInfo).port}/v1/devices`
+  const headers = { Authorization: `Bearer ${host}` }
+  for (let index = 0; index < 6; index++) {
+    assert.equal((await fetch(url, { method: 'POST', headers,
+      body: JSON.stringify({ id: `device-${index}`, hash: digest(token()) }) })).status, 201)
+  }
 })
