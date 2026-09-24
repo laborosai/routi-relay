@@ -1,12 +1,13 @@
 # Routi Connect relay
 
-A local prototype for connecting a paired viewer to a Routi Mac through an outbound connection. The relay forwards data; agents and browsers stay on the Mac. Intended hosted address: `connect.routibot.com`. Clients also accept a custom relay origin for self-hosting.
-
-The connector now uses mutual TLS 1.3 inside the WebSocket tunnel. Each device trusts only its paired peer's certificate. The relay receives credential hashes and encrypted traffic, not device private keys. It can see connection timing and traffic volume. Public deployment still needs HTTPS, abuse controls, bandwidth quotas, and app integration.
+Connect a paired phone or tablet to Routi Core on your Mac. Agents and browsers
+stay on the Mac; the relay forwards end-to-end encrypted traffic without access
+to message contents or device private keys. It can see connection timing and
+traffic volume. You can also host your own relay.
 
 ## Try it locally
 
-Requires Node 22+, pnpm 10, and OpenSSL 3 for generating local test certificates.
+Requires Node 22+, pnpm 10, and OpenSSL 3.
 
 ```sh
 pnpm install
@@ -14,90 +15,14 @@ pnpm test
 pnpm demo
 ```
 
-The demo creates temporary credentials, starts a loopback relay and a simulated Mac connector, exchanges a synthetic message from a simulated viewer, then revokes the pair. It cleans up after itself. No Routi bots or accounts are accessed.
+The demo exchanges a synthetic message between simulated devices through a local
+relay, then cleans up. It does not access your bots or accounts.
 
-To run the standalone relay:
+## Documentation
 
-```sh
-pnpm pair
-pnpm build
-RELAY_PAIRS_FILE=pair.local/relay.json pnpm start
-```
-
-It listens on `127.0.0.1:8787`; `GET /health` returns `ok`. The pair command refuses to overwrite an existing directory. It writes owner-only files:
-
-- `host.json`: host credential, private key, certificate, trusted viewer certificate.
-- `viewer.json`: viewer credential, private key, certificate, trusted host certificate.
-- `relay.json`: pair ID and credential hashes. This is the only file that belongs on the relay server.
-
-Certificates expire after one year. This provisioning command creates both identities on one machine for development. It is not the final device enrollment flow: the Apple apps must generate/store their own keys, exchange identities with explicit user approval, and support renewal and revocation. Never upload the host/viewer files to a relay. Generated `pair.local/` is ignored by Git.
-
-## Connection flow
-
-1. `startHost()` opens an outbound `/v1/host` control WebSocket and waits for viewers.
-2. `connectViewer()` opens `/v1/sessions/<random-id>`. Authentication derives the pair from its bearer credential.
-3. The relay announces the session to that pair's host. The host opens a second outbound connection for it.
-4. Both receive `{"type":"ready"}`, then perform mutual TLS authentication through the relay. The connector exposes a decrypted byte stream only at the endpoints.
-
-The host requires the paired viewer certificate before delivering the stream to the application. The viewer verifies the host certificate and `routi-host` TLS identity. Standard Node/OpenSSL TLS handles encryption, integrity and session keys. There is no custom cryptographic protocol. Outer `wss://` is required except on literal loopback addresses for local tests. The host retries network disconnects with bounded exponential delay; rejected credentials stop retries. Application commands are never automatically replayed.
-
-`revokePair(id)` invalidates credentials and closes active sessions in memory. Persistent revocation currently requires removing the pair from the server configuration and restarting. The Mac must also revoke the trusted viewer identity during app integration so a compromised relay cannot restore access by itself.
-
-Limits: 100 sessions globally, 1 MiB per WebSocket message, 2 MiB outgoing WebSocket buffer per peer, 10 seconds to join, and 30-second heartbeat checks. Over-budget sessions close instead of dropping bytes. Client TLS handshakes also time out. These are prototype limits, not subscription allowances or a measured capacity claim.
-
-## Three-day Connect trials
-
-Set `RELAY_TRIALS_FILE` to a writable JSON file and `RELAY_MAX_TRIALS` to the total
-number of enrollments to allow. Docker persists this in its data volume; enrollment
-is disabled by default and Caddy restricts `/v1/trial` to `TEST_CLIENT_IPS`.
-
-The Mac creates its keys locally and registers credential hashes. The first viewer
-connection starts a 72-hour deadline, shared by all paired devices. Restarting or
-re-pairing does not extend it. Expiration blocks chat and desktop streams; the control connection and pairing
-remain available so a replacement device can restore purchases. Bots keep running. `/v1/access` returns access status to an
-authenticated device. Existing manually provisioned pairs remain unrestricted.
-
-Trial enrollment is a bounded pilot, not proof of a unique person. Someone
-creating new credentials can request another enrollment. Keep enrollment restricted
-until public abuse controls and bandwidth limits are in place. Certificates still
-need automatic renewal before expiry.
+- [Engineering](docs/ENGINEERING.md): provisioning, connection flow, trials, and Apple subscriptions.
+- [Deployment](deploy/README.md): running a private hosted pilot.
 
 ## License
 
 Copyright 2026 Laboros AI, Inc. Licensed under the [Apache License, Version 2.0](LICENSE).
-
-### Apple subscriptions
-
-Use Apple StoreKit and the App Store Server API directly. A one-Mac subscription
-is bound to the authenticated pairing, not to a name or email. Restore preserves
-that assignment. Additional Mac plans and transfers are not implemented yet.
-
-Create the monthly `com.routibot.connect.monthly` subscription in App Store Connect
-and configure Notifications V2 at `https://<relay>/v1/apple-notifications`.
-Keep the In-App Purchase API key and configuration outside the repository:
-
-```json
-{
-  "bundleId": "your.app.bundle",
-  "appAppleId": 123456789,
-  "productId": "com.routibot.connect.monthly",
-  "sandbox": true,
-  "issuerId": "your-issuer-id",
-  "keyId": "your-key-id",
-  "keyFile": "/run/apple/key.p8",
-  "rootFiles": ["/run/apple/AppleRootCA-G3.cer"]
-}
-```
-
-Download the root certificate from [Apple PKI](https://www.apple.com/certificateauthority/).
-Set `RELAY_APPLE_CONFIG` to this file and `RELAY_SUBSCRIPTIONS_FILE` to persistent
-storage. Docker deployments can add `deploy/compose.billing.yml`, with
-`RELAY_APPLE_DIRECTORY` containing `config.json`, the key, and root certificates.
-Use a separate sandbox deployment for TestFlight; production must set `sandbox`
-to false. Never accept sandbox or Xcode-signed purchases on the paid production relay.
-
-Signed purchases and notifications are checked with Apple's server library.
-The API supplies current subscription status, including billing grace periods;
-replaying an old purchase cannot undo a refund. Notifications and five-minute
-reconciliation update access. Cancellation retains access until the paid period
-ends. App Store outages retain the last verified deadline, without extending it.
