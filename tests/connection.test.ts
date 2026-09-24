@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { X509Certificate, createPrivateKey } from 'node:crypto'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 import { test, type TestContext } from 'node:test'
@@ -200,4 +201,16 @@ test('an expired trial QR credential reaches only pairing, even with a valid pho
   }
   await assert.rejects(connectViewer(url, { ...pairing.viewer, token: phoneToken }), /402/)
   assert.equal(applicationCalls, 0)
+})
+
+
+test('new Mac and phone certificates are valid for one year and match their private keys', async () => {
+  const pairing = await createPairing()
+  for (const device of [pairing.host, pairing.viewer]) {
+    const certificate = new X509Certificate(device.cert)
+    assert.equal(Date.parse(certificate.validTo) - Date.parse(certificate.validFrom), 365 * 86400_000)
+    assert.ok(Date.parse(certificate.validFrom) <= Date.now())
+    assert.ok(Date.parse(certificate.validTo) > Date.now())
+    assert.ok(certificate.checkPrivateKey(createPrivateKey(device.key)))
+  }
 })
