@@ -30,7 +30,7 @@ It listens on `127.0.0.1:8787`; `GET /health` returns `ok`. The pair command ref
 - `viewer.json`: viewer credential, private key, certificate, trusted host certificate.
 - `relay.json`: pair ID and credential hashes. This is the only file that belongs on the relay server.
 
-New certificates expire after one year; existing certificates retain their original expiry. This provisioning command creates both identities on one machine for development. It is not the final device enrollment flow: the Apple apps must generate/store their own keys, exchange identities with explicit user approval, and support renewal and revocation. Never upload the host/viewer files to a relay. Generated `pair.local/` is ignored by Git.
+Certificates expire after one year. This provisioning command creates both identities on one machine for development. It is not the final device enrollment flow: the Apple apps must generate/store their own keys, exchange identities with explicit user approval, and support renewal and revocation. Never upload the host/viewer files to a relay. Generated `pair.local/` is ignored by Git.
 
 ## Connection flow
 
@@ -60,7 +60,7 @@ authenticated device. Existing manually provisioned pairs remain unrestricted.
 Trial enrollment is a bounded pilot, not proof of a unique person. Someone
 creating new credentials can request another enrollment. Keep enrollment restricted
 until public abuse controls and bandwidth limits are in place. Certificates still
-need automatic renewal before expiry; changing the default does not renew existing credentials.
+need automatic renewal before expiry.
 
 ## License
 
