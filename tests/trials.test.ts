@@ -107,3 +107,45 @@ test('a phone cannot start a trial unless its deadline is saved', async t => {
   assert.deepEqual(await response.json(), { trial: true, expiresAt: null, expired: false })
   assert.equal(relay.sessionCount, 0)
 })
+
+test('new Mac enrollment is rate limited without blocking retries or other networks', async t => {
+  let saved: Trial[] = []
+  const relay = createRelay([], { trustProxy: true, saveTrials: next => { saved = next } })
+  t.after(() => relay.close())
+  relay.server.listen(0, '127.0.0.1')
+  await once(relay.server, 'listening')
+  const base = `http://127.0.0.1:${(relay.server.address() as AddressInfo).port}`
+  const enroll = (ip: string, mac = token(), phone = token()) => fetch(`${base}/v1/trial`, {
+    method: 'POST', headers: { Authorization: `Bearer ${mac}`, 'X-Routi-Client-IP': ip },
+    body: JSON.stringify({ viewerTokenHash: digest(phone) }),
+  })
+  const mac = token(), phone = token()
+  assert.equal((await enroll('invalid')).status, 400)
+  assert.equal((await enroll('192.0.2.1', mac, phone)).status, 201)
+  assert.equal((await enroll('192.0.2.1')).status, 201)
+  assert.equal((await enroll('192.0.2.1')).status, 201)
+  const blocked = await enroll('192.0.2.1')
+  assert.equal(blocked.status, 429)
+  assert.ok(Number(blocked.headers.get('Retry-After')) > 0)
+  assert.equal(saved.length, 3)
+  assert.equal((await enroll('192.0.2.1', mac, phone)).status, 200)
+  assert.equal((await enroll('192.0.2.2')).status, 201)
+  const later = Date.now() + 3600_001
+  t.mock.method(Date, 'now', () => later)
+  assert.equal((await enroll('192.0.2.1')).status, 201)
+})
+
+test('direct clients cannot bypass enrollment limits by spoofing proxy headers', async t => {
+  const relay = createRelay([], { saveTrials: () => {} })
+  t.after(() => relay.close())
+  relay.server.listen(0, '127.0.0.1')
+  await once(relay.server, 'listening')
+  const base = `http://127.0.0.1:${(relay.server.address() as AddressInfo).port}`
+  for (let i = 1; i <= 4; i++) {
+    const response = await fetch(`${base}/v1/trial`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token()}`, 'X-Routi-Client-IP': `192.0.2.${i}` },
+      body: JSON.stringify({ viewerTokenHash: digest(token()) }),
+    })
+    assert.equal(response.status, i <= 3 ? 201 : 429)
+  }
+})

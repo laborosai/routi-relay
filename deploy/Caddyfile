@@ -7,7 +7,9 @@
     }
     @testClients remote_ip {$TEST_CLIENT_IPS}
     handle @testClients {
-        reverse_proxy relay:8787
+        reverse_proxy relay:8787 {
+            header_up X-Routi-Client-IP {remote_host}
+        }
     }
     handle {
         respond "Private Routi Connect test" 403
