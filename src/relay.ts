@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
+import { isIP } from 'node:net'
 import { WebSocket, WebSocketServer } from 'ws'
 
 import type { AppleBilling, Subscription } from './subscriptions.js'
@@ -22,6 +23,7 @@ export function createRelay(pairs: Pair[], options: {
   heartbeatMs?: number; waitMs?: number;
   billing?: AppleBilling; subscriptions?: Subscription[]; saveSubscriptions?: (subscriptions: Subscription[]) => void;
   trials?: Trial[]; saveTrials?: (trials: Trial[]) => void; maxTrials?: number;
+  trustProxy?: boolean;
   devices?: RegisteredDevice[]; saveDevices?: (devices: RegisteredDevice[]) => void;
 } = {}) {
   let subscriptions = options.subscriptions ?? []
@@ -73,6 +75,7 @@ export function createRelay(pairs: Pair[], options: {
     credentials.set(device.hash, { pair: device.hostId, role: 'viewer', deviceId: device.id })
   }
   let billingRequests = 0
+  const enrollments = new Map<string, { count: number; resetAt: number }>()
   const server = createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store')
     const reply = (status: number, body: unknown = {}) => {
@@ -142,10 +145,21 @@ export function createRelay(pairs: Pair[], options: {
         }
         if (value.viewerTokenHash === hash || credentials.has(value.viewerTokenHash)) { reply(409); return }
         if (trials.length >= (options.maxTrials ?? 100)) { reply(503); return }
+        // Only trust the header when a private reverse proxy overwrites it.
+        const address = options.trustProxy ? req.headers['x-routi-client-ip'] : req.socket.remoteAddress
+        if (typeof address !== 'string' || !isIP(address)) { reply(400); return }
+        const now = Date.now()
+        for (const [ip, window] of enrollments) if (window.resetAt <= now) enrollments.delete(ip)
+        const window = enrollments.get(address) ?? { count: 0, resetAt: now + 3600_000 }
+        if (window.count >= 3) {
+          res.setHeader('Retry-After', Math.ceil((window.resetAt - now) / 1000))
+          reply(429, { error: 'Too many new Macs registered from this network. Please try again later.' }); return
+        }
         const trial: Trial = { id: randomUUID(), hostHash: hash, viewerHash: value.viewerTokenHash, expiresAt: null }
         const next = [...trials, trial]
         options.saveTrials(next)
         trials = next
+        enrollments.set(address, { count: window.count + 1, resetAt: window.resetAt })
         credentials.set(hash, { pair: trial.id, role: 'host' })
         credentials.set(trial.viewerHash, { pair: trial.id, role: 'viewer' })
         limits.set(trial.id, null)

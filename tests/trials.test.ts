@@ -83,7 +83,8 @@ test('enrollment is bounded, authenticated, and cannot succeed without durable s
   assert.equal((await enroll(mac, {}, 'https://example.com')).status, 401)
   assert.equal((await enroll(mac, null)).status, 400)
   assert.equal((await enroll(mac, { viewerTokenHash: digest(mac) })).status, 409)
-  assert.equal((await enroll()).status, 500)
+  // Failed saves must not consume the three-enrollment allowance.
+  for (let i = 0; i < 4; i++) assert.equal((await enroll()).status, 500)
   fail = false
   assert.deepEqual((await Promise.all([enroll(), enroll()])).map(r => r.status).sort(), [200, 201])
   assert.equal((await enroll(token())).status, 409)
@@ -106,4 +107,47 @@ test('a phone cannot start a trial unless its deadline is saved', async t => {
   const response = await fetch(base.replace('ws:', 'http:') + '/v1/access', { headers: { Authorization: `Bearer ${mac}` } })
   assert.deepEqual(await response.json(), { trial: true, expiresAt: null, expired: false })
   assert.equal(relay.sessionCount, 0)
+})
+
+test('new Mac enrollment is rate limited without blocking retries or other networks', async t => {
+  let saved: Trial[] = []
+  const relay = createRelay([], { trustProxy: true, saveTrials: next => { saved = next } })
+  t.after(() => relay.close())
+  relay.server.listen(0, '127.0.0.1')
+  await once(relay.server, 'listening')
+  const base = `http://127.0.0.1:${(relay.server.address() as AddressInfo).port}`
+  const enroll = (ip: string, mac = token(), phone = token()) => fetch(`${base}/v1/trial`, {
+    method: 'POST', headers: { Authorization: `Bearer ${mac}`, 'X-Routi-Client-IP': ip },
+    body: JSON.stringify({ viewerTokenHash: digest(phone) }),
+  })
+  const mac = token(), phone = token()
+  assert.equal((await enroll('')).status, 400)
+  assert.equal((await enroll('invalid')).status, 400)
+  assert.equal((await enroll('192.0.2.1', mac, phone)).status, 201)
+  assert.equal((await enroll('192.0.2.1')).status, 201)
+  assert.equal((await enroll('192.0.2.1')).status, 201)
+  const blocked = await enroll('192.0.2.1')
+  assert.equal(blocked.status, 429)
+  assert.ok(Number(blocked.headers.get('Retry-After')) > 0)
+  assert.equal(saved.length, 3)
+  assert.equal((await enroll('192.0.2.1', mac, phone)).status, 200)
+  assert.equal((await enroll('192.0.2.2')).status, 201)
+  const later = Date.now() + 3600_001
+  t.mock.method(Date, 'now', () => later)
+  assert.equal((await enroll('192.0.2.1')).status, 201)
+})
+
+test('concurrent direct clients cannot bypass enrollment limits with spoofed proxy headers', async t => {
+  const relay = createRelay([], { saveTrials: () => {} })
+  t.after(() => relay.close())
+  relay.server.listen(0, '127.0.0.1')
+  await once(relay.server, 'listening')
+  const base = `http://127.0.0.1:${(relay.server.address() as AddressInfo).port}`
+  const responses = await Promise.all([1, 2, 3, 4].map(i =>
+    fetch(`${base}/v1/trial`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token()}`, 'X-Routi-Client-IP': `192.0.2.${i}` },
+      body: JSON.stringify({ viewerTokenHash: digest(token()) }),
+    }),
+  ))
+  assert.deepEqual(responses.map(response => response.status).sort(), [201, 201, 201, 429])
 })

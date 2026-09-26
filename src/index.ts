@@ -32,6 +32,7 @@ if (subscriptionPath) {
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
 }
 const relay = createRelay(pairs, {
+  trustProxy: process.env.RELAY_TRUST_PROXY === '1',
   billing, subscriptions,
   saveSubscriptions: subscriptionPath ? next => {
     writeFileSync(`${subscriptionPath}.next`, JSON.stringify(next), { mode: 0o600 })

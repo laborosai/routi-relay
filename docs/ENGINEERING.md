@@ -48,6 +48,11 @@ creating new credentials can request another enrollment. Keep enrollment restric
 until public abuse controls and bandwidth limits are in place. Certificates still
 need automatic renewal before expiry.
 
+New enrollment is limited to three Macs per IP per hour; existing enrollment retries
+do not count. This counter resets on relay restart; the persistent total enrollment
+cap remains. Behind Caddy, `RELAY_TRUST_PROXY=1` uses its overwritten
+`X-Routi-Client-IP` header. Keep the relay port private when enabling this option.
+
 ## Apple subscriptions
 
 Use Apple StoreKit and the App Store Server API directly. A one-Mac subscription
