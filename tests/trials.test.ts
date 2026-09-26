@@ -83,7 +83,8 @@ test('enrollment is bounded, authenticated, and cannot succeed without durable s
   assert.equal((await enroll(mac, {}, 'https://example.com')).status, 401)
   assert.equal((await enroll(mac, null)).status, 400)
   assert.equal((await enroll(mac, { viewerTokenHash: digest(mac) })).status, 409)
-  assert.equal((await enroll()).status, 500)
+  // Failed saves must not consume the three-enrollment allowance.
+  for (let i = 0; i < 4; i++) assert.equal((await enroll()).status, 500)
   fail = false
   assert.deepEqual((await Promise.all([enroll(), enroll()])).map(r => r.status).sort(), [200, 201])
   assert.equal((await enroll(token())).status, 409)
@@ -120,6 +121,7 @@ test('new Mac enrollment is rate limited without blocking retries or other netwo
     body: JSON.stringify({ viewerTokenHash: digest(phone) }),
   })
   const mac = token(), phone = token()
+  assert.equal((await enroll('')).status, 400)
   assert.equal((await enroll('invalid')).status, 400)
   assert.equal((await enroll('192.0.2.1', mac, phone)).status, 201)
   assert.equal((await enroll('192.0.2.1')).status, 201)
@@ -135,17 +137,17 @@ test('new Mac enrollment is rate limited without blocking retries or other netwo
   assert.equal((await enroll('192.0.2.1')).status, 201)
 })
 
-test('direct clients cannot bypass enrollment limits by spoofing proxy headers', async t => {
+test('concurrent direct clients cannot bypass enrollment limits with spoofed proxy headers', async t => {
   const relay = createRelay([], { saveTrials: () => {} })
   t.after(() => relay.close())
   relay.server.listen(0, '127.0.0.1')
   await once(relay.server, 'listening')
   const base = `http://127.0.0.1:${(relay.server.address() as AddressInfo).port}`
-  for (let i = 1; i <= 4; i++) {
-    const response = await fetch(`${base}/v1/trial`, {
+  const responses = await Promise.all([1, 2, 3, 4].map(i =>
+    fetch(`${base}/v1/trial`, {
       method: 'POST', headers: { Authorization: `Bearer ${token()}`, 'X-Routi-Client-IP': `192.0.2.${i}` },
       body: JSON.stringify({ viewerTokenHash: digest(token()) }),
-    })
-    assert.equal(response.status, i <= 3 ? 201 : 429)
-  }
+    }),
+  ))
+  assert.deepEqual(responses.map(response => response.status).sort(), [201, 201, 201, 429])
 })
