@@ -145,8 +145,8 @@ export function createRelay(pairs: Pair[], options: {
         }
         if (value.viewerTokenHash === hash || credentials.has(value.viewerTokenHash)) { reply(409); return }
         if (trials.length >= (options.maxTrials ?? 100)) { reply(503); return }
-        // Only trust the header when a private reverse proxy overwrites it.
-        const address = options.trustProxy ? req.headers['x-routi-client-ip'] : req.socket.remoteAddress
+        // Our single edge proxy supplies one client IP; never trust this header from direct clients.
+        const address = options.trustProxy ? req.headers['x-forwarded-for'] : req.socket.remoteAddress
         if (typeof address !== 'string' || !isIP(address)) { reply(400); return }
         const now = Date.now()
         for (const [ip, window] of enrollments) if (window.resetAt <= now) enrollments.delete(ip)

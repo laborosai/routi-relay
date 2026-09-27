@@ -117,12 +117,13 @@ test('new Mac enrollment is rate limited without blocking retries or other netwo
   await once(relay.server, 'listening')
   const base = `http://127.0.0.1:${(relay.server.address() as AddressInfo).port}`
   const enroll = (ip: string, mac = token(), phone = token()) => fetch(`${base}/v1/trial`, {
-    method: 'POST', headers: { Authorization: `Bearer ${mac}`, 'X-Routi-Client-IP': ip },
+    method: 'POST', headers: { Authorization: `Bearer ${mac}`, 'X-Forwarded-For': ip },
     body: JSON.stringify({ viewerTokenHash: digest(phone) }),
   })
   const mac = token(), phone = token()
   assert.equal((await enroll('')).status, 400)
   assert.equal((await enroll('invalid')).status, 400)
+  assert.equal((await enroll('192.0.2.1, 192.0.2.2')).status, 400)
   assert.equal((await enroll('192.0.2.1', mac, phone)).status, 201)
   assert.equal((await enroll('192.0.2.1')).status, 201)
   assert.equal((await enroll('192.0.2.1')).status, 201)
@@ -145,7 +146,7 @@ test('concurrent direct clients cannot bypass enrollment limits with spoofed pro
   const base = `http://127.0.0.1:${(relay.server.address() as AddressInfo).port}`
   const responses = await Promise.all([1, 2, 3, 4].map(i =>
     fetch(`${base}/v1/trial`, {
-      method: 'POST', headers: { Authorization: `Bearer ${token()}`, 'X-Routi-Client-IP': `192.0.2.${i}` },
+      method: 'POST', headers: { Authorization: `Bearer ${token()}`, 'X-Forwarded-For': `192.0.2.${i}` },
       body: JSON.stringify({ viewerTokenHash: digest(token()) }),
     }),
   ))
