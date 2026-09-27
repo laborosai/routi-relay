@@ -9,20 +9,18 @@ import { WebSocket } from 'ws'
 import { RelayStore } from '../src/store.js'
 import { createRelay, digest } from '../src/relay.js'
 
-const empty = () => ({ pairs: [], trials: [], devices: [], subscriptions: [] })
-
-test('SQLite imports once, rolls back invalid writes, and preserves records across restart', t => {
+test('SQLite starts empty, rolls back invalid writes, and preserves records across restart', t => {
   const directory = mkdtempSync(join(tmpdir(), 'relay-db-'))
   const path = join(directory, 'relay.db')
   let store: RelayStore
   t.after(() => { store?.close(); rmSync(directory, { recursive: true, force: true }) })
   const mac = { id: 'mac', hostHash: digest('mac'), viewerHash: digest('invite'), expiresAt: 1000 }
   const device = { hostId: 'mac', id: 'phone', hash: digest('phone') }
-  const records = { ...empty(), trials: [mac], devices: [device],
-    subscriptions: [{ originalTransactionId: 'purchase', macId: 'mac', expiresAt: 2000 }] }
-  // Failed import must not leave a partial database or mark it initialized.
-  assert.throws(() => new RelayStore(path, () => ({ ...records, devices: [device, device] })))
-  store = new RelayStore(path, () => records)
+  store = new RelayStore(path)
+  assert.deepEqual(store.load(), { trials: [], devices: [], subscriptions: [] })
+  store.saveTrials([mac])
+  store.saveDevices([device])
+  store.saveSubscriptions([{ originalTransactionId: 'purchase', macId: 'mac', expiresAt: 2000 }])
   assert.equal(statSync(path).mode & 0o777, 0o600)
   assert.throws(() => store.saveDevices([device, { ...device, id: 'duplicate-token' }]))
   assert.equal(store.load().devices.length, 1)
@@ -34,7 +32,7 @@ test('SQLite imports once, rolls back invalid writes, and preserves records acro
   assert.equal(store.load().trials[0]!.expiresAt, 3000)
   store.saveDevices([])
   store.close()
-  store = new RelayStore(path, () => { throw Error('Must never import old files again') })
+  store = new RelayStore(path)
   assert.equal(store.load().devices.length, 0)
   assert.equal(store.load().trials[0]!.expiresAt, 3000)
   assert.equal(store.load().subscriptions[0]!.expiresAt, 2000)
@@ -44,14 +42,13 @@ test('relay enrollment, trial start, purchase, and device revocation persist in 
   const directory = mkdtempSync(join(tmpdir(), 'relay-db-'))
   const path = join(directory, 'relay.db')
   const mac = 'm'.repeat(43), invite = 'i'.repeat(43), phone = 'p'.repeat(43)
-  let store = new RelayStore(path, empty)
+  let store = new RelayStore(path)
   let relay: ReturnType<typeof createRelay>
   let base: string
   let accountToken = ''
   const paidUntil = Date.now() + 7 * 86400_000
   const start = async () => {
-    const { pairs, ...records } = store.load()
-    relay = createRelay(pairs, { ...records, maxTrials: 10,
+    relay = createRelay([], { ...store.load(), maxTrials: 10,
       saveTrials: next => store.saveTrials(next), saveDevices: next => store.saveDevices(next),
       saveSubscriptions: next => store.saveSubscriptions(next),
       billing: { productId: 'test.monthly',
@@ -81,7 +78,7 @@ test('relay enrollment, trial start, purchase, and device revocation persist in 
   assert.equal((await api('/v1/subscription', phone, 'POST', { signedPayload: 'test' })).status, 200)
   assert.equal((await api('/v1/devices/phone', mac, 'DELETE')).status, 200)
   await relay!.close(); store.close()
-  store = new RelayStore(path, () => { throw Error('Unexpected reimport') })
+  store = new RelayStore(path)
   await start()
   assert.equal((await api('/v1/access', phone)).status, 401)
   assert.equal((await api('/v1/trial', mac, 'POST', { viewerTokenHash: digest(invite) })).status, 200)

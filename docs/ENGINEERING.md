@@ -1,22 +1,15 @@
 # Engineering
 
-## Local provisioning
-
-To run the standalone relay:
+## Local relay
 
 ```sh
-pnpm pair
 pnpm build
-RELAY_DB_FILE=relay.db RELAY_PAIRS_FILE=pair.local/relay.json pnpm start
+RELAY_DB_FILE=relay.db RELAY_MAX_TRIALS=10 pnpm start
 ```
 
-It listens on `127.0.0.1:8787`; `GET /health` returns `ok`. The pair command refuses to overwrite an existing directory. It writes owner-only files:
-
-- `host.json`: host credential, private key, certificate, trusted viewer certificate.
-- `viewer.json`: viewer credential, private key, certificate, trusted host certificate.
-- `relay.json`: pair ID and credential hashes. This is the only file that belongs on the relay server.
-
-Certificates expire after one year. This command creates development identities. In the app, the Mac generates per-phone credentials and delivers them through pinned TLS after QR approval; the phone stores them in Keychain. Never upload host/viewer files to the relay. Generated `pair.local/` is ignored by Git.
+The relay listens on `127.0.0.1:8787`; `GET /health` returns `ok`. Connect a Mac
+through Routi's settings, then pair a phone using its QR code. `pnpm demo` tests
+an encrypted connection locally without app accounts.
 
 ## Storage
 
@@ -26,11 +19,7 @@ hold Macs/trial deadlines, paired-device hashes, and subscriptions. Live sockets
 stay in memory; chat and desktop traffic are never stored here. Run one relay
 process per database.
 
-An empty database imports `RELAY_PAIRS_FILE`, `RELAY_TRIALS_FILE`,
-`RELAY_DEVICES_FILE`, and `RELAY_SUBSCRIPTIONS_FILE` once, in one transaction.
-Existing deployments must retain those paths on their first SQLite startup.
-Subsequent starts ignore the JSON files; keep them for rollback until verified.
-Rollbacks after new pairings or purchases require exporting the updated records.
+New installations start with an empty database. Macs register through `/v1/trial`.
 Stop the relay before copying its database/volume for backup, or use SQLite's online
 backup tool. Do not copy only the main database file while WAL writes are active.
 
@@ -56,7 +45,7 @@ The Mac creates its keys locally and registers credential hashes. The first view
 connection starts a 72-hour deadline, shared by all paired devices. Restarting or
 re-pairing does not extend it. Expiration blocks chat and desktop streams; the control connection and pairing
 remain available so a replacement device can restore purchases. Bots keep running. `/v1/access` returns access status to an
-authenticated device. Existing manually provisioned pairs remain unrestricted.
+authenticated device.
 
 Trial enrollment is a bounded pilot, not proof of a unique person. Someone
 creating new credentials can request another enrollment. Keep enrollment restricted
