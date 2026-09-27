@@ -8,7 +8,7 @@ import { digest } from './relay.js'
 
 export type Device = { token: string; key: string; cert: string; peerCert: string }
 
-/** Local test provisioning. Keys never go to the relay; production pairing belongs in the apps. */
+/** Create device credentials locally. Private keys never go to the relay. */
 export async function createPairing() {
   const directory = await mkdtemp(join(tmpdir(), 'routi-pair-'))
   try {
@@ -17,7 +17,7 @@ export async function createPairing() {
       const certPath = join(directory, `${role}.crt`)
       await promisify(execFile)('openssl', [
         'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256',
-        '-nodes', '-sha256', '-days', '30', '-subj', `/CN=routi-${role}`,
+        '-nodes', '-sha256', '-days', '365', '-subj', `/CN=routi-${role}`,
         '-addext', `subjectAltName=DNS:routi-${role}`,
         '-addext', 'basicConstraints=critical,CA:FALSE',
         '-addext', `extendedKeyUsage=${role === 'host' ? 'serverAuth' : 'clientAuth'}`,

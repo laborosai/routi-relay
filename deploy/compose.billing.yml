@@ -1,0 +1,8 @@
+# Add with: docker compose -f deploy/compose.yml -f deploy/compose.billing.yml up -d
+services:
+  relay:
+    environment:
+      RELAY_APPLE_CONFIG: /run/apple/config.json
+      RELAY_SUBSCRIPTIONS_FILE: /app/data/subscriptions.json
+    volumes:
+      - ${RELAY_APPLE_DIRECTORY:?Set the private Apple configuration directory}:/run/apple:ro
