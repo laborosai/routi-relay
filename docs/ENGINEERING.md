@@ -16,7 +16,7 @@ It listens on `127.0.0.1:8787`; `GET /health` returns `ok`. The pair command ref
 - `viewer.json`: viewer credential, private key, certificate, trusted host certificate.
 - `relay.json`: pair ID and credential hashes. This is the only file that belongs on the relay server.
 
-Certificates expire after one year. This provisioning command creates both identities on one machine for development. It is not the final device enrollment flow: the Apple apps must generate/store their own keys, exchange identities with explicit user approval, and support renewal and revocation. Never upload the host/viewer files to a relay. Generated `pair.local/` is ignored by Git.
+Certificates expire after one year. This command creates development identities. In the app, the Mac generates per-phone credentials and delivers them through pinned TLS after QR approval; the phone stores them in Keychain. Never upload host/viewer files to the relay. Generated `pair.local/` is ignored by Git.
 
 ## Connection flow
 
