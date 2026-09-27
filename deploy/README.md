@@ -33,16 +33,13 @@ This connects both simulated peers from the Mac through the hosted relay and che
 
 The service runs as a non-root user with a read-only filesystem, 256 MiB memory limit, no capabilities, bounded logs and no exposed backend port. These contain pilot resource usage but are not account billing quotas. The paired TLS connector chunks large writes into bounded WebSocket messages and preserves byte ordering.
 
-To stop: `docker compose down` (keep volumes for certificates). To revoke: remove the pair from relay.json and recreate the relay container. The Routi Core integration supports phone pairing and immediate chat revocation; certificate renewal and public enrollment remain separate work.
+To stop: `docker compose down` (keep volumes for certificates and the relay database). Revoke phones from Routi’s Mac settings. The Routi Core integration supports phone pairing and immediate chat revocation; certificate renewal and public enrollment remain separate work.
 
-Device registrations persist in the `relay-data` volume (`RELAY_DEVICES_FILE`),
-separately from the read-only host provisioning file. Each record stores a host ID,
-device ID, and credential hash. Back up this volume alongside the provisioning
-configuration; device private keys never belong on the relay.
+Macs, device registrations, trial deadlines, and subscriptions persist in SQLite
+at `/app/data/relay.db` in `relay-data`. On first startup, existing JSON records
+are imported once; later edits to those files have no effect. Keep the existing
+volume, provisioning secret, and billing override mounted during the upgrade.
+See [storage and backup instructions](../docs/ENGINEERING.md#storage).
 
-Set `maxDevices` on each entry in `relay.json` to its allowed device count (default
-five, supported range 1–50), then recreate the relay. The API rejects registrations
-above that allowance. This is an operator-set pilot entitlement, not subscription
-billing. Removing a device closes its sessions without disconnecting other devices.
-The original viewer token remains a bootstrap credential for the QR claim exchange.
-Session concurrency remains bounded independently of the device allowance.
+New trials are disabled until `RELAY_MAX_TRIALS` is set above zero. Device counts
+are unlimited by default; imported manual pairs retain any explicit allowance.

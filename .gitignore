@@ -4,3 +4,6 @@ dist/
 .env
 *.local/
 deploy/.env
+*.db
+*.db-wal
+*.db-shm

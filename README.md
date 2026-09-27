@@ -7,7 +7,7 @@ traffic volume. You can also host your own relay.
 
 ## Try it locally
 
-Requires Node 22+, pnpm 10, and OpenSSL 3.
+Requires Node 22.13+, pnpm 10, and OpenSSL 3.
 
 ```sh
 pnpm install

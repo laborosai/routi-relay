@@ -367,6 +367,7 @@ export function createRelay(pairs: Pair[], options: {
       for (const [key, session] of sessions) dispose(key, session)
       await new Promise<void>(resolve => wss.close(() => resolve()))
       if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()))
+      await Promise.allSettled(refreshing.values())
     },
   }
 }
