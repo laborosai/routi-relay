@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Routi Relay backup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target
