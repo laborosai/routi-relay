@@ -34,7 +34,7 @@ class MonitorTest(unittest.TestCase):
                 df.write_text('#!/bin/sh\necho "disk 100 10 90 ${TEST_DISK_USED}% /data"\n')
                 df.chmod(0o755)
                 url = f"http://127.0.0.1:{server.server_port}"
-                env = dict(os.environ, PATH=directory + ":" + os.environ["PATH"],
+                env = dict(HOME=directory, PATH=directory + ":" + os.environ["PATH"],
                            RELAY_HEALTH_URL=url + "/health", RELAY_HEARTBEAT_URL=url + "/ping")
                 for status, body, disk, expected in [
                     (200, b"ok", "20", True), (503, b"down", "20", False),
