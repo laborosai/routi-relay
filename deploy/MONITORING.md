@@ -29,4 +29,4 @@ the recovery notification. Monitor backups with their own daily heartbeat.
 
 This checks availability, not end-to-end chat or VNC. Inspect resource use with
 `docker stats --no-stream` and the VPS provider's CPU, network and transfer graphs.
-Tests: `python3 tests/monitor.py` (local HTTP only; no monitoring account needed).
+Tests: `pnpm test` (local HTTP only; no monitoring account needed).
