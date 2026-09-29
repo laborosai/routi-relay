@@ -1,8 +1,10 @@
 # Database backups
 
-The host runs an hourly SQLite online backup, encrypts it with restic, and verifies
-a restored copy. Retention: 24 hourly, 7 daily, 4 weekly snapshots. At most about
-an hour of registrations or billing changes can be lost between backups.
+The host runs a daily SQLite online backup, encrypts it with restic, and verifies
+a restored copy. Retention: 7 daily and 4 weekly snapshots. A failure can lose
+up to about a day of registrations or billing changes between successful backups.
+Restic hashes data chunks and uploads only those not already stored; unchanged
+database contents are reused across snapshots, with small new snapshot metadata.
 
 Install `sqlite3` and `restic` on the Ubuntu host. Create a private S3 bucket and a
 dedicated restic repository. Hetzner Object Storage and other S3-compatible providers
@@ -36,7 +38,7 @@ sudo systemctl enable --now routi-backup.timer
 Inspect runs with `journalctl -u routi-backup.service`. Tests use a local restic
 repository, including a database with live WAL transactions: `python3 tests/backup.py`.
 Set `BACKUP_HEARTBEAT_URL` in the environment file to a Healthchecks.io ping URL
-(period one hour, grace 40 minutes) to alert when a backup fails or stops running.
+(period one day, grace one hour) to alert when a backup fails or stops running.
 
 ## Restore
 

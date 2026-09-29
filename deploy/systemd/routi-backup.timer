@@ -1,8 +1,8 @@
 [Unit]
-Description=Hourly Routi Relay backup
+Description=Daily Routi Relay backup
 
 [Timer]
-OnCalendar=hourly
+OnCalendar=daily
 Persistent=true
 RandomizedDelaySec=5min
 
