@@ -39,7 +39,7 @@ Limits: 100 sessions globally, 1 MiB per WebSocket message, 2 MiB outgoing WebSo
 ## Three-day Connect trials
 
 Set `RELAY_MAX_TRIALS` to the total number of enrollments to allow (default zero).
-Caddy restricts `/v1/trial` to `TEST_CLIENT_IPS`.
+Caddy exposes `/v1/trial` publicly; the relay enforces the enrollment limits below.
 
 The Mac creates its keys locally and registers credential hashes. The first viewer
 connection starts a 72-hour deadline, shared by all paired devices. Restarting or
@@ -47,10 +47,8 @@ re-pairing does not extend it. Expiration blocks chat and desktop streams; the c
 remain available so a replacement device can restore purchases. Bots keep running. `/v1/access` returns access status to an
 authenticated device.
 
-Trial enrollment is a bounded pilot, not proof of a unique person. Someone
-creating new credentials can request another enrollment. Keep enrollment restricted
-until public abuse controls and bandwidth limits are in place. Certificates still
-need automatic renewal before expiry.
+Enrollment does not prove a unique person: new credentials can request another
+trial within the limits below. Certificates still need automatic renewal before expiry.
 
 New enrollment is limited to three Macs per IP per hour; existing enrollment retries
 do not count. This counter resets on relay restart; the persistent total enrollment

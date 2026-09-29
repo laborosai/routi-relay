@@ -31,7 +31,6 @@ services:
     restart: unless-stopped
     environment:
       RELAY_DOMAIN: ${RELAY_DOMAIN:-connect.routibot.com}
-      TEST_CLIENT_IPS: ${TEST_CLIENT_IPS:?Set space-separated client IPs or CIDRs for the private pilot}
     ports: ['80:80', '443:443']
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
