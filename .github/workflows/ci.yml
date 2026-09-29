@@ -14,4 +14,5 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - run: python3 tests/monitor.py
       - run: pnpm test

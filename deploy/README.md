@@ -34,3 +34,5 @@ through `/v1/trial`. See [storage and backup instructions](../docs/ENGINEERING.m
 
 New trials are disabled until `RELAY_MAX_TRIALS` is set above zero. Device counts
 are unlimited by default.
+
+Configure [availability alerts](MONITORING.md) before accepting public traffic.
