@@ -12,10 +12,9 @@ sqlite3 -readonly "$RELAY_DATABASE" ".timeout 10000" ".backup '$work/relay.db'"
 [[ $(sqlite3 "$work/relay.db" 'PRAGMA integrity_check;') == ok ]]
 
 # A dedicated repository keeps retention independent from other services.
-restic backup --host routi-relay --tag relay-db --stdin --stdin-filename relay.db < "$work/relay.db"
-restic restore latest --host routi-relay --tag relay-db --target "$work/restored"
-cmp "$work/relay.db" "$work/restored/relay.db"
-restic forget --host routi-relay --tag relay-db --keep-daily 7 --keep-weekly 4 --prune
+restic backup --stdin --stdin-filename relay.db < "$work/relay.db"
+restic dump latest /relay.db | cmp "$work/relay.db" -
+restic forget --keep-daily 7 --keep-weekly 4 --prune
 if [[ -n ${BACKUP_HEARTBEAT_URL:-} ]]; then
     curl --fail --silent --show-error --max-time 15 --retry 2 --output /dev/null "$BACKUP_HEARTBEAT_URL"
 fi

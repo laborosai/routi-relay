@@ -13,7 +13,7 @@ class BackupTest(unittest.TestCase):
     def test_restore_includes_committed_wal_but_not_uncommitted_changes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            env = dict(os.environ, RESTIC_REPOSITORY=str(root / "repo"),
+            env = dict(PATH=os.environ["PATH"], HOME=directory, RESTIC_REPOSITORY=str(root / "repo"),
                        RESTIC_PASSWORD="test-only", RELAY_DATABASE=str(root / "relay.db"))
             def run(*args):
                 return subprocess.run(args, env=env, check=True, capture_output=True, text=True)
