@@ -1,0 +1,9 @@
+[Unit]
+Description=Check Routi Relay availability and disk space
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/routi-monitor.env
+ExecStart=/usr/local/lib/routi-relay/monitor.sh
+TimeoutStartSec=55
+NoNewPrivileges=true
