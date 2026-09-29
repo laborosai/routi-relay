@@ -1,0 +1,9 @@
+[Unit]
+Description=Back up and verify the Routi Relay database
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/routi-backup.env
+ExecStart=/usr/local/lib/routi-relay/backup.sh
+TimeoutStartSec=30min
+UMask=0077

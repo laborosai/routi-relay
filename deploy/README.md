@@ -29,7 +29,8 @@ The service runs as a non-root user with a read-only filesystem, 256 MiB memory 
 To stop: `docker compose down` (keep volumes for certificates and the relay database). Revoke phones from Routi’s Mac settings. The Routi Core integration supports phone pairing and immediate chat revocation; automatic certificate renewal remains separate work.
 
 Macs, device registrations, trial deadlines, and subscriptions persist in SQLite
-at `/app/data/relay.db` in `relay-data`. New installations start empty; Macs register
+at `/app/data/relay.db` in `relay-data`. Configure [encrypted backups](BACKUPS.md).
+New installations start empty; Macs register
 through `/v1/trial`. See [storage and backup instructions](../docs/ENGINEERING.md#storage).
 
 New trials are disabled until `RELAY_MAX_TRIALS` is set above zero. Device counts
