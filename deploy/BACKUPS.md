@@ -36,7 +36,8 @@ sudo systemctl enable --now routi-backup.timer
 ```
 
 Inspect runs with `journalctl -u routi-backup.service`. Tests use a local restic
-repository, including a database with live WAL transactions: `python3 tests/backup.py`.
+repository, including a database with live WAL transactions: `pnpm test`
+(requires `restic` and `sqlite3` on PATH; CI installs both).
 Set `BACKUP_HEARTBEAT_URL` in the environment file to a Healthchecks.io ping URL
 (period one day, grace one hour) to alert when a backup fails or stops running.
 
