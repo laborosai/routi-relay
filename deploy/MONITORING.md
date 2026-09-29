@@ -25,7 +25,7 @@ sudo systemctl enable --now routi-monitor.timer
 
 Inspect failures with `journalctl -u routi-monitor.service`. Test alert delivery
 by stopping the timer for more than three minutes, then restarting it and checking
-the recovery notification. Monitor backups with their own hourly heartbeat.
+the recovery notification. Monitor backups with their own daily heartbeat.
 
 This checks availability, not end-to-end chat or VNC. Inspect resource use with
 `docker stats --no-stream` and the VPS provider's CPU, network and transfer graphs.
