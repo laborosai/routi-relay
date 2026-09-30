@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict'
 import { X509Certificate, createPrivateKey } from 'node:crypto'
 import { once } from 'node:events'
-import type { AddressInfo } from 'node:net'
+import { setTimeout as delay } from 'node:timers/promises'
+import { createServer, connect, type AddressInfo, type Socket } from 'node:net'
 import { test, type TestContext } from 'node:test'
 import { createPairing } from '../src/pairing.js'
 import { createRelay, digest } from '../src/relay.js'
 import { connectViewer, startHost } from '../src/connection.js'
 
-async function setup(t: TestContext) {
+async function setup(t: TestContext, options: Parameters<typeof createRelay>[1] = {}) {
   const pairing = await createPairing()
-  const relay = createRelay([pairing.relay])
+  const relay = createRelay([pairing.relay], options)
   relay.server.listen(0, '127.0.0.1')
   await once(relay.server, 'listening')
   t.after(() => relay.close())
@@ -213,4 +214,42 @@ test('new Mac and phone certificates are valid for one year and match their priv
     assert.ok(Date.parse(certificate.validTo) > Date.now())
     assert.ok(certificate.checkPrivateKey(createPrivateKey(device.key)))
   }
+})
+
+test('host recovers when a network drop hides the relay disconnect', { timeout: 5000 }, async t => {
+  const { pairing, url } = await setup(t, { heartbeatMs: 20 })
+  const sockets = new Set<Socket>()
+  let cutConnection: () => void = () => { throw Error('Host never connected') }
+  const proxy = createServer(downstream => {
+    const upstream = connect(Number(new URL(url).port), '127.0.0.1')
+    sockets.add(downstream); sockets.add(upstream)
+    downstream.pipe(upstream).pipe(downstream)
+    downstream.on('error', () => upstream.destroy())
+    upstream.on('error', () => downstream.destroy())
+    cutConnection = () => {
+      // The relay loses the Mac, but the Mac receives neither close nor more pings.
+      downstream.unpipe(upstream); upstream.unpipe(downstream)
+      upstream.destroy()
+    }
+  })
+  proxy.listen(0, '127.0.0.1')
+  await once(proxy, 'listening')
+  t.after(() => { for (const socket of sockets) socket.destroy(); proxy.close() })
+  const states: string[] = []
+  const host = startHost(`ws://127.0.0.1:${(proxy.address() as AddressInfo).port}`, pairing.host, {
+    heartbeatTimeoutMs: 100, reconnectMs: 10,
+    onState: state => states.push(state), onConnection: stream => stream.pipe(stream),
+  })
+  t.after(() => host.stop())
+  await host.ready
+  await delay(250)
+  assert.deepEqual(states, ['connecting', 'connected'], 'heartbeats keep an idle host connected')
+  cutConnection()
+  const viewer = await connectViewer(url, pairing.viewer, AbortSignal.timeout(1500))
+  t.after(() => viewer.destroy())
+  const response = once(viewer, 'data')
+  viewer.write('reconnected')
+  assert.equal((await response)[0].toString(), 'reconnected')
+  assert.ok(states.includes('reconnecting'))
+  assert.equal(states.at(-1), 'connected')
 })
