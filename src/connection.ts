@@ -89,6 +89,7 @@ export function startHost(base: string, device: Device, options: {
   onPairingConnection?: (stream: TLSSocket) => void;
   onError?: (error: Error) => void;
   reconnectMs?: number;
+  heartbeatTimeoutMs?: number;
   onState?: (state: 'connecting' | 'connected' | 'reconnecting' | 'rejected' | 'disconnected') => void;
 }) {
   // Validate before scheduling any reconnects.
@@ -142,6 +143,15 @@ export function startHost(base: string, device: Device, options: {
     let rejected = false
     options.onState?.('connecting')
     control = socket(base, device.token, '/v1/host', !!options.onPairingConnection)
+    let heartbeat: NodeJS.Timeout | undefined
+    const keepAlive = () => {
+      clearTimeout(heartbeat)
+      // Relay pings every 30s. A silent network loss may never deliver 'close'.
+      heartbeat = setTimeout(() => control.terminate(), options.heartbeatTimeoutMs ?? 45_000)
+      heartbeat.unref()
+    }
+    control.on('open', keepAlive)
+    control.on('ping', keepAlive)
     control.on('unexpected-response', (_request, response) => {
       response.resume()
       rejected = response.statusCode === 402 || response.statusCode === 401 || response.statusCode === 403
@@ -162,6 +172,7 @@ export function startHost(base: string, device: Device, options: {
       } catch { control.terminate() }
     })
     control.on('close', () => {
+      clearTimeout(heartbeat)
       active.abort()
       disposeStreams()
       if (!stopped && !rejected) {
